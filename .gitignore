@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+runs/
+*.db
+*.db-wal
+*.db-shm
+.env
+configs/aria-x.toml
+!configs/aria-x.example.toml
+
+# build/test artifacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# macOS AppleDouble metadata
+._*
+.AppleDouble

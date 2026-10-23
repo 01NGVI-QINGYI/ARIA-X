@@ -1,0 +1,68 @@
+# ARIA-X example engagement — offline, deterministic, authorized.
+#
+# This config points at the bundled intentionally-vulnerable demo target. It is
+# authorized by construction: the only target is 127.0.0.1 (your own machine)
+# and the scenario provider replays a fixed script, so no model API is used.
+#
+# Terminal A:
+#   python3 examples/demo_target.py --port 8000
+# Terminal B (from the repository root):
+#   PYTHONPATH=src python3 -m aria_x -c examples/demo_engagement.toml run \
+#     --goal "Prove whether the local demo app exposes a file-disclosure vulnerability."
+#
+# The scenario script is documentation-grade: it assumes the demo target is
+# listening on 127.0.0.1:8000. `aria-x demo` is the self-contained version that
+# discovers an ephemeral port automatically.
+
+name = "ARIA-X example — local demo target"
+data_dir = "data/example-demo"
+runs_dir = "runs/example-demo"
+log_level = "INFO"
+
+[scope]
+# Set by hand only after you have written authorization. Here the "target" is
+# the demo process you started yourself on loopback.
+authorized = true
+targets = ["127.0.0.1", "http://127.0.0.1:8000"]
+deny = []
+allow_private = true
+allow_loopback = true
+max_rps = 10.0
+
+[llm]
+provider = "scenario"
+scenario = "examples/scenario_demo.json"
+model = "scenario-demo"
+temperature = 0.0
+max_tokens = 2048
+
+[budget]
+max_seconds = 120
+max_llm_calls = 24
+max_tokens = 120000
+max_tool_calls = 30
+max_steps_per_task = 8
+max_intents_per_reason = 2
+max_concurrency = 1
+max_total_intents = 4
+
+[sandbox]
+# The demo only needs HTTP tools; mock guarantees no host command execution.
+backend = "mock"
+network = "none"
+timeout = 20
+
+[safety]
+approval = "auto"
+block_destructive = true
+redact_secrets = true
+
+[server]
+host = "127.0.0.1"
+port = 8787
+
+[engine]
+language = "zh"
+bootstrap = true
+max_idle_rounds = 1
+require_finding_for_completion = true

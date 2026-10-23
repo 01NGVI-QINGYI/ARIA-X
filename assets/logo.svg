@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">ARIA-X logo</title>
+  <desc id="desc">A hexagonal shield containing a rising arrow and three connected nodes, symbolising autonomous security reasoning.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#111b2e"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="core" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#818cf8"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- shield -->
+  <path d="M256 76 L400 132 V250 C400 332 336 394 256 430 C176 394 112 332 112 250 V132 Z"
+        fill="none" stroke="url(#edge)" stroke-width="14" stroke-linejoin="round" opacity="0.9"/>
+  <path d="M256 100 L376 146 V250 C376 318 324 372 256 404 C188 372 136 318 136 250 V146 Z"
+        fill="#0e1626" opacity="0.72"/>
+
+  <!-- graph edges -->
+  <g stroke="url(#core)" stroke-width="7" stroke-linecap="round" opacity="0.85">
+    <line x1="180" y1="318" x2="256" y2="228"/>
+    <line x1="256" y1="228" x2="336" y2="318"/>
+    <line x1="180" y1="318" x2="256" y2="360"/>
+    <line x1="256" y1="360" x2="336" y2="318"/>
+  </g>
+
+  <!-- nodes -->
+  <g filter="url(#glow)">
+    <circle cx="256" cy="228" r="24" fill="url(#core)"/>
+    <circle cx="180" cy="318" r="17" fill="#38bdf8"/>
+    <circle cx="336" cy="318" r="17" fill="#a78bfa"/>
+    <circle cx="256" cy="360" r="17" fill="#34d399"/>
+  </g>
+
+  <!-- rising intent arrow -->
+  <path d="M206 268 L256 218 L306 268" fill="none" stroke="#f8fafc" stroke-width="12"
+        stroke-linecap="round" stroke-linejoin="round" opacity="0.0"/>
+  <text x="256" y="470" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif"
+        font-size="58" font-weight="700" letter-spacing="10" fill="#e2e8f0">ARIA-X</text>
+</svg>

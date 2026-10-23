@@ -1,0 +1,69 @@
+# ARIA-X example configuration — authorized testing only.
+# Copy to configs/aria-x.toml and edit. Secrets can come from ARIA_X_API_KEY.
+
+name = "Staging engagement"
+data_dir = "data"
+runs_dir = "runs"
+log_level = "INFO"
+
+[scope]
+# ARIA-X refuses to start an engagement until this is explicitly true.
+authorized = true
+# Hostnames, wildcards, CIDRs, host:port, or URL prefixes.
+targets = ["127.0.0.1"]
+deny = []
+allow_private = true
+allow_loopback = true
+max_rps = 3.0
+ports = [21, 22, 25, 53, 80, 110, 143, 443, 445, 3306, 3389, 5432, 6379, 8000, 8080, 8443, 8888, 9000]
+
+[llm]
+provider = "openai"            # mock | scenario | openai | anthropic | ollama
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+api_key = ""                   # prefer ARIA_X_API_KEY in the environment
+temperature = 0.2
+max_tokens = 4096
+max_retries = 2
+tool_mode = "auto"             # auto | native | prompt
+
+[llm.role_models]
+# Optional per-role overrides. Omit to use llm.model everywhere.
+# planner = "deepseek-reasoner"
+# worker = "deepseek-chat"
+
+[budget]
+max_seconds = 1800
+max_llm_calls = 160
+max_tokens = 1200000
+max_tool_calls = 400
+max_steps_per_task = 18
+max_intents_per_reason = 3
+max_concurrency = 2
+max_total_intents = 40
+
+[sandbox]
+backend = "local"              # local | docker | mock
+image = "kalilinux/kali-rolling"
+network = "none"               # "bridge" only inside an isolated lab
+timeout = 120
+max_output = 20000
+
+[safety]
+approval = "auto"              # auto | ask | deny
+block_destructive = true
+redact_secrets = true
+allow_public_targets = true
+max_command_seconds = 120
+
+[server]
+host = "127.0.0.1"
+port = 8787
+auth_token = ""                # or ARIA_X_AUTH_TOKEN
+
+[engine]
+language = "zh"
+bootstrap = true
+max_idle_rounds = 2
+max_concurrency = 2
+skills_dir = "skills"

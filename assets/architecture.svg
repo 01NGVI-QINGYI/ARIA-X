@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img"
+     aria-labelledby="atitle adesc" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
+  <title id="atitle">ARIA-X architecture</title>
+  <desc id="adesc">Web console and HTTP API above the engagement engine, which connects the blackboard store, planner and worker agents, tool layer, sandbox, LLM router and reports. Left side shows concept lineage from Cairn, ARTEX and PentAGI.</desc>
+  <defs>
+    <linearGradient id="heen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1220"/><stop offset="1" stop-color="#0f172a"/>
+    </linearGradient>
+    <style>
+      .bg { fill: #0b1220; }
+      .box { fill: #131e33; stroke: #2b3b55; stroke-width: 1.5; rx: 14; }
+      .accent { fill: #10233b; stroke: #38bdf8; stroke-width: 2; }
+      .engine { fill: #161f38; stroke: #818cf8; stroke-width: 2; }
+      .store { fill: #10241f; stroke: #34d399; stroke-width: 2; }
+      .tool { fill: #251b2e; stroke: #c084fc; stroke-width: 1.5; }
+      .t { fill: #e2e8f0; font-size: 18px; font-weight: 600; }
+      .s { fill: #94a3b8; font-size: 14px; }
+      .lbl { fill: #38bdf8; font-size: 13px; letter-spacing: 2px; font-weight: 700; }
+      .line { stroke: #3b4b63; stroke-width: 1.6; fill: none; }
+      .hline { stroke: #475569; stroke-width: 1.4; fill: none; }
+      .chip { fill: #0f1d31; stroke: #334155; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect class="bg" width="1200" height="760" rx="22"/>
+
+  <!-- title -->
+  <text x="44" y="58" class="t" font-size="28">ARIA-X — Autonomous Reasoning &amp; Investigation Agent, eXtended</text>
+  <text x="44" y="86" class="s">state-space security research engine · Python 3.11+ · standard library only</text>
+
+  <!-- lineage column -->
+  <text x="44" y="132" class="lbl">CONCEPT LINEAGE</text>
+  <g>
+    <rect class="box" x="44" y="150" width="232" height="104" rx="14"/>
+    <text x="62" y="180" class="t">Cairn</text>
+    <text x="62" y="206" class="s">AGPL-3.0 · blackboard</text>
+    <text x="62" y="228" class="s">Fact / Intent / Hint</text>
+    <text x="62" y="246" class="s">reason → explore OODA</text>
+
+    <rect class="box" x="44" y="270" width="232" height="122" rx="14"/>
+    <text x="62" y="300" class="t">ARTEX</text>
+    <text x="62" y="326" class="s">AGPL-3.0 · dual graph</text>
+    <text x="62" y="348" class="s">planner owns intents</text>
+    <text x="62" y="370" class="s">todo chain + traces</text>
+
+    <rect class="box" x="44" y="408" width="232" height="104" rx="14"/>
+    <text x="62" y="438" class="t">PentAGI</text>
+    <text x="62" y="464" class="s">MIT · specialist team</text>
+    <text x="62" y="486" class="s">providers · sandbox</text>
+    <text x="62" y="504" class="s">layered memory</text>
+  </g>
+
+  <path class="hline" d="M276 202 H330 M276 331 H330 M276 460 H330"/>
+  <path class="line" d="M330 202 V460 M330 331 H372"/>
+
+  <!-- main stack -->
+  <text x="388" y="132" class="lbl">RUNTIME</text>
+  <rect class="accent" x="388" y="150" width="770" height="76" rx="14"/>
+  <text x="410" y="182" class="t">Web console (vanilla JS)</text>
+  <text x="410" y="206" class="s">GET / · live SSE events · graph / findings / traces / approvals / report</text>
+
+  <rect class="accent" x="388" y="242" width="770" height="76" rx="14"/>
+  <text x="410" y="274" class="t">HTTP API — create_server(config, engagement, bus, store)</text>
+  <text x="410" y="298" class="s">127.0.0.1:8787 · optional Bearer token · SSE without holding the SQLite lock</text>
+
+  <rect class="engine" x="388" y="334" width="770" height="188" rx="14"/>
+  <text x="410" y="366" class="t" font-size="20">Engagement engine — orchestration loop</text>
+  <g class="s">
+    <text x="410" y="392">bootstrap → reason (planner) → dispatch explore ×N → persist → repeat</text>
+    <text x="410" y="414">budget guards: seconds · LLM calls · tokens · tool calls · intents · concurrency</text>
+    <text x="410" y="436">idle / change detection · todo chain · hint injection · cancellation</text>
+    <text x="410" y="458">mock · scenario · OpenAI-compatible · Anthropic · Ollama providers</text>
+    <text x="410" y="480">report renderer → markdown · HTML · JSON export</text>
+    <text x="410" y="502">JSONL event log + SQLite WAL state</text>
+  </g>
+
+  <!-- agents -->
+  <rect class="engine" x="388" y="538" width="376" height="118" rx="14"/>
+  <text x="410" y="568" class="t">Agents</text>
+  <g class="s">
+    <text x="410" y="592">planner (JSON intent contract)</text>
+    <text x="410" y="612">explore workers (tool loop)</text>
+    <text x="410" y="632">specialists (researcher / coder / adviser / memorist)</text>
+  </g>
+
+  <!-- tools -->
+  <rect class="tool" x="782" y="538" width="376" height="118" rx="14"/>
+  <text x="804" y="568" class="t">Tool layer</text>
+  <g class="s">
+    <text x="804" y="592">scope guard → network tools</text>
+    <text x="804" y="612">terminal + sandbox (local / docker / mock)</text>
+    <text x="804" y="632">blackboard writes · knowledge search · delegation</text>
+  </g>
+
+  <!-- store -->
+  <rect class="store" x="388" y="672" width="770" height="56" rx="14"/>
+  <text x="410" y="706" class="t">SQLite store</text>
+  <text x="520" y="706" class="s">nodes · edges · assets · anchors · todos · tasks · traces · evidence · audit · approvals</text>
+
+  <!-- connections -->
+  <g class="line">
+    <path d="M773 226 V242"/>
+    <path d="M773 318 V334"/>
+    <path d="M773 522 V538"/>
+    <path d="M576 656 V672"/>
+    <path d="M970 656 V672"/>
+  </g>
+
+  <!-- footer -->
+  <text x="44" y="730" class="s">Authorized testing only · scope.authorized must be true · network tools call Scope before I/O</text>
+</svg>

@@ -1,0 +1,107 @@
+{
+  "_comment": "Deterministic ARIA-X scenario for examples/demo_engagement.toml. Assumes examples/demo_target.py is listening on 127.0.0.1:8000. It is a documentation example, not the E2E test: tests/test_demo_e2e.py uses aria_x.demo.DemoPolicy and a port discovered at runtime.",
+  "default": "SCENARIO: no scripted response matched this step. See examples/scenario_demo.json.",
+  "roles": {
+    "bootstrap": [
+      {
+        "tool_calls": [
+          {
+            "name": "http_request",
+            "arguments": {"url": "http://127.0.0.1:8000/", "method": "GET"}
+          }
+        ]
+      },
+      {
+        "json": {
+          "fact": {
+            "title": "Demo app is reachable on 127.0.0.1:8000",
+            "body": "GET / returned the demo index page with links to /files and /debug. No vulnerability proven yet.",
+            "confidence": "high"
+          },
+          "findings": [],
+          "assets": [
+            {"kind": "host", "value": "127.0.0.1"},
+            {"kind": "endpoint", "value": "http://127.0.0.1:8000/files"}
+          ],
+          "goal_proven": false,
+          "summary": "Reconnaissance only; hand over to the planner."
+        }
+      }
+    ],
+    "planner": [
+      {
+        "json": {
+          "action": "intents",
+          "reasoning": "The demo index links to a file viewer with a path parameter. Test it with a traversal payload before anything else.",
+          "intents": [
+            {
+              "description": "Request /files?path=../flag.txt on http://127.0.0.1:8000 and record the exact response body and status.",
+              "priority": 1
+            }
+          ],
+          "todos": [
+            {"title": "Fingerprint the demo web app", "status": "done"},
+            {"title": "Test /files for path traversal", "status": "active"}
+          ]
+        }
+      },
+      {
+        "json": {
+          "action": "complete",
+          "reasoning": "The traversal returned the demo flag and a high-severity finding is recorded with reproduction evidence.",
+          "complete": {
+            "summary": "Confirmed unauthenticated path traversal (/files, CWE-22) on the local demo target.",
+            "proof": ["finding"]
+          }
+        }
+      }
+    ],
+    "worker": [
+      {
+        "tool_calls": [
+          {
+            "name": "http_request",
+            "arguments": {"url": "http://127.0.0.1:8000/files?path=welcome.txt", "method": "GET"}
+          }
+        ]
+      },
+      {
+        "tool_calls": [
+          {
+            "name": "http_request",
+            "arguments": {"url": "http://127.0.0.1:8000/files?path=../flag.txt", "method": "GET"}
+          }
+        ]
+      },
+      {
+        "json": {
+          "fact": {
+            "title": "Path traversal in /files leaks flag.txt",
+            "body": "GET http://127.0.0.1:8000/files?path=../flag.txt returned HTTP 200 with the body ARIA-X{demo_path_traversal_confirmed}. The path parameter is joined with the public directory without confinement.",
+            "confidence": "high"
+          },
+          "findings": [
+            {
+              "title": "Unauthenticated path traversal in /files (CWE-22)",
+              "severity": "high",
+              "body": "The /files handler accepts an attacker-controlled path and joins it with the public web root without canonicalization or confinement. GET /files?path=../flag.txt returns a file outside the web root. Impact: disclosure of readable files; the demo flag proves the primitive. Remediation: resolve the final path, reject anything outside the public root, and serve static files through a hardened handler.",
+              "cvss": 7.5,
+              "asset_values": ["http://127.0.0.1:8000/files", "127.0.0.1"],
+              "evidence": "GET http://127.0.0.1:8000/files?path=../flag.txt -> HTTP 200; body contained ARIA-X{demo_path_traversal_confirmed}"
+            }
+          ],
+          "assets": [
+            {"kind": "host", "value": "127.0.0.1"},
+            {"kind": "endpoint", "value": "http://127.0.0.1:8000/files"},
+            {"kind": "artifact", "value": "flag.txt"}
+          ],
+          "goal_proven": true,
+          "summary": "Confirmed and recorded a high-severity path traversal."
+        }
+      }
+    ],
+    "reporter": [
+      "# ARIA-X Example Engagement — Local Demo Target\n\n## Executive summary\n\nAn unauthenticated path traversal (CWE-22) was confirmed against the local demo service. A file outside the web root (`flag.txt`) was readable through the `/files` endpoint.\n\n## Scope and methodology\n\nTarget: `http://127.0.0.1:8000` (demo process started locally). Method: scripted HTTP probes via the ARIA-X scenario provider; no external network traffic.\n\n## Findings\n\n### High — Unauthenticated path traversal in `/files`\n\n- **Evidence:** `GET /files?path=../flag.txt` returned HTTP 200 with `ARIA-X{demo_path_traversal_confirmed}`.\n- **Impact:** disclosure of files readable by the web process outside the public root.\n- **Remediation:** canonicalize the joined path, reject anything outside the public root, and avoid ad-hoc static file handlers.\n\n## Coverage and blind spots\n\nOnly the two endpoints advertised by the index page were tested. This scenario is deterministic documentation; it makes no claim about other vulnerabilities.\n"
+    ]
+  }
+}

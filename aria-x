@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Convenience launcher: run ARIA-X from this checkout without installing it.
+# Usage: ./aria-x demo | ./aria-x serve | ./aria-x run --goal "..."
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common.sh
+source "${ROOT}/scripts/_common.sh"
+PY="$(aria_x_python)"
+export PYTHONPATH="${ROOT}/src${PYTHONPATH:+:${PYTHONPATH}}"
+exec "${PY}" -m aria_x "$@"

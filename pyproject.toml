@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aria-x"
+version = "0.1.0"
+description = "ARIA-X — Autonomous Reasoning & Investigation Agent, eXtended: state-space security research engine fusing ARTEX, Cairn and PentAGI"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "01NGVI-QINGYI"}]
+keywords = ["security", "autonomous-agents", "state-space-search", "pentest", "ai"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[project.scripts]
+aria-x = "aria_x.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aria_x = ["web/*", "templates/*"]

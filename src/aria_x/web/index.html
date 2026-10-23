@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="ARIA-X console — autonomous security engagement control plane.">
+  <title>ARIA-X · Engagement Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 44 44" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="aria-x-mark" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#4ade80"/>
+            <stop offset="100%" stop-color="#22d3ee"/>
+          </linearGradient>
+        </defs>
+        <path d="M22 2 40 9v13c0 10-7.6 17.4-18 20C11.6 39.4 4 32 4 22V9Z"
+              fill="none" stroke="url(#aria-x-mark)" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M22 11v22M13 22h18" stroke="url(#aria-x-mark)" stroke-width="1.4" opacity=".55"/>
+        <circle cx="22" cy="22" r="4.2" fill="url(#aria-x-mark)"/>
+        <circle cx="22" cy="22" r="12" fill="none" stroke="url(#aria-x-mark)" stroke-width=".8"
+                stroke-dasharray="2 4" opacity=".6"/>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">ARIA-X</span>
+        <span class="brand-sub">Autonomous Reasoning &amp; Investigation Agent, eXtended</span>
+      </div>
+    </div>
+
+    <div class="topbar-controls">
+      <label class="field inline" for="project-select">
+        <span class="field-label">Engagement</span>
+        <select id="project-select" class="select" autocomplete="off">
+          <option value="">No projects yet</option>
+        </select>
+      </label>
+      <span id="run-chip" class="chip idle" title="Current run status">
+        <span class="dot"></span><span id="run-chip-text">idle</span>
+      </span>
+      <button id="btn-refresh" class="btn ghost" type="button" title="Refresh data (R)">
+        <span class="btn-icon" aria-hidden="true">↻</span> Refresh
+      </button>
+      <button id="btn-settings" class="btn ghost icon-only" type="button"
+              aria-label="Open settings" title="Settings">⚙</button>
+      <span id="conn-pill" class="chip idle" title="Live event stream status">
+        <span class="dot"></span><span id="conn-text">offline</span>
+      </span>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Console sections">
+    <button class="tab" id="tab-overview" role="tab" aria-selected="true"
+            aria-controls="panel-overview" data-tab="overview" tabindex="0">Overview</button>
+    <button class="tab" id="tab-graph" role="tab" aria-selected="false"
+            aria-controls="panel-graph" data-tab="graph" tabindex="-1">Graph</button>
+    <button class="tab" id="tab-findings" role="tab" aria-selected="false"
+            aria-controls="panel-findings" data-tab="findings" tabindex="-1">
+      Findings <span class="tab-badge" id="tab-findings-count" hidden></span>
+    </button>
+    <button class="tab" id="tab-assets" role="tab" aria-selected="false"
+            aria-controls="panel-assets" data-tab="assets" tabindex="-1">Assets</button>
+    <button class="tab" id="tab-timeline" role="tab" aria-selected="false"
+            aria-controls="panel-timeline" data-tab="timeline" tabindex="-1">
+      Timeline <span class="pulse-dot" id="timeline-pulse" aria-hidden="true"></span>
+    </button>
+    <button class="tab" id="tab-todos" role="tab" aria-selected="false"
+            aria-controls="panel-todos" data-tab="todos" tabindex="-1">Todos</button>
+    <button class="tab" id="tab-report" role="tab" aria-selected="false"
+            aria-controls="panel-report" data-tab="report" tabindex="-1">Report</button>
+    <button class="tab" id="tab-settings" role="tab" aria-selected="false"
+            aria-controls="panel-settings" data-tab="settings" tabindex="-1">Settings</button>
+  </nav>
+
+  <main id="main" class="main" tabindex="-1">
+
+    <!-- ============================ OVERVIEW ============================ -->
+    <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
+      <div id="overview-empty" class="empty-state">
+        <div class="empty-icon" aria-hidden="true">◈</div>
+        <h2>No engagement selected</h2>
+        <p>Create an engagement to start an authorized autonomous security assessment.</p>
+        <button class="btn primary" type="button" id="empty-create-jump">Create engagement</button>
+      </div>
+
+      <div id="overview-content" class="stack" hidden>
+        <div class="grid two">
+          <section class="card hero-card">
+            <div class="card-head">
+              <h2 class="card-title">Engagement</h2>
+              <span id="project-status" class="chip ok">active</span>
+            </div>
+            <h3 id="project-name" class="project-name">—</h3>
+            <p id="project-goal" class="project-goal">—</p>
+            <dl class="meta-strip" id="project-meta"></dl>
+          </section>
+
+          <section class="card run-card">
+            <div class="card-head">
+              <h2 class="card-title">Run control</h2>
+              <span id="run-state" class="chip idle">created</span>
+            </div>
+            <div class="run-ids">
+              <span class="k">run</span><code id="run-id">—</code>
+              <span class="k">elapsed</span><span id="run-elapsed">—</span>
+            </div>
+            <label class="field" for="run-goal">
+              <span class="field-label">Run goal <span class="muted">(optional override)</span></span>
+              <textarea id="run-goal" class="input textarea" rows="2"
+                        placeholder="Defaults to the project goal…"></textarea>
+            </label>
+            <div class="button-row">
+              <button id="btn-start" class="btn primary" type="button">
+                <span aria-hidden="true">▶</span> Start run
+              </button>
+              <button id="btn-stop" class="btn danger" type="button" disabled>
+                <span aria-hidden="true">■</span> Stop run
+              </button>
+              <span class="hint-text" id="run-hint">Ctrl+Enter in the goal box starts a run.</span>
+            </div>
+            <div class="tasks" id="run-tasks-wrap" hidden>
+              <h3 class="sub-title">Tasks</h3>
+              <ul class="task-list" id="run-tasks"></ul>
+            </div>
+          </section>
+        </div>
+
+        <section class="stats-grid" id="overview-stats" aria-label="Engagement counters"></section>
+
+        <div class="grid two">
+          <section class="card">
+            <div class="card-head">
+              <h2 class="card-title">Budget</h2>
+              <span class="muted" id="budget-note">live accounting</span>
+            </div>
+            <div id="budget-bars" class="budget-bars">
+              <p class="muted">No budget data yet — start a run.</p>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2 class="card-title">Approval queue</h2>
+              <span class="chip warn" id="approval-count">0 pending</span>
+            </div>
+            <div id="approval-list" class="approval-list">
+              <p class="muted">Risky actions that need a human decision appear here.</p>
+            </div>
+          </section>
+        </div>
+
+        <div class="grid two">
+          <section class="card">
+            <div class="card-head">
+              <h2 class="card-title">Human hint</h2>
+              <span class="muted">steers the next planning round</span>
+            </div>
+            <form id="hint-form" class="stack tight" autocomplete="off">
+              <label class="field" for="hint-input">
+                <span class="field-label">Hint content</span>
+                <textarea id="hint-input" class="input textarea" rows="3" required
+                          placeholder="e.g. Try the /backup directory; the login flow looks custom."></textarea>
+              </label>
+              <div class="button-row">
+                <button class="btn" type="submit" id="hint-submit">Send hint</button>
+                <span class="hint-text">Recorded as a blackboard hint and a chat message.</span>
+              </div>
+            </form>
+          </section>
+
+          <section class="card">
+            <div class="card-head">
+              <h2 class="card-title">New engagement</h2>
+              <span class="muted">authorized targets only</span>
+            </div>
+            <form id="create-form" class="stack tight" autocomplete="off">
+              <div class="form-row">
+                <label class="field" for="new-name">
+                  <span class="field-label">Name</span>
+                  <input id="new-name" class="input" type="text" required maxlength="120"
+                         placeholder="Staging lab">
+                </label>
+                <label class="field" for="new-targets">
+                  <span class="field-label">Targets <span class="muted">(comma separated)</span></span>
+                  <input id="new-targets" class="input" type="text"
+                         placeholder="127.0.0.1, *.lab.test">
+                </label>
+              </div>
+              <label class="field" for="new-goal">
+                <span class="field-label">Goal</span>
+                <textarea id="new-goal" class="input textarea" rows="2" required
+                          placeholder="Prove whether the staging app exposes an auth bypass."></textarea>
+              </label>
+              <div class="button-row">
+                <button class="btn primary" type="submit">Create</button>
+                <label class="check" for="new-authorized">
+                  <input id="new-authorized" type="checkbox" checked>
+                  <span>I am authorized to test these targets</span>
+                </label>
+              </div>
+            </form>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================= GRAPH ============================= -->
+    <section class="panel" id="panel-graph" role="tabpanel" aria-labelledby="tab-graph" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Exploration graph</h2>
+          <p class="section-sub" id="graph-count">No nodes</p>
+        </div>
+        <div class="section-actions">
+          <div class="legend" id="graph-legend" aria-label="Node kind legend"></div>
+          <button class="btn ghost" id="graph-fit" type="button" title="Re-run layout">Re-layout</button>
+        </div>
+      </div>
+      <div class="graph-layout">
+        <div class="graph-canvas">
+          <div class="empty-state compact" id="graph-empty">
+            <p>Start a run to populate the exploration graph.</p>
+          </div>
+          <svg id="graph-svg" class="graph-svg" viewBox="0 0 960 620" role="img"
+               aria-label="Force-directed exploration graph" hidden></svg>
+        </div>
+        <aside class="graph-detail" aria-live="polite">
+          <div id="graph-detail">
+            <p class="muted">Select a node to inspect its fact, intent, hint or finding.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================ FINDINGS ============================ -->
+    <section class="panel" id="panel-findings" role="tabpanel" aria-labelledby="tab-findings" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Findings</h2>
+          <p class="section-sub"><span id="findings-count">0</span> findings, highest severity first</p>
+        </div>
+        <label class="field inline" for="finding-filter">
+          <span class="field-label">Severity</span>
+          <select id="finding-filter" class="select">
+            <option value="">All</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="medium">Medium</option>
+            <option value="low">Low</option>
+            <option value="info">Info</option>
+          </select>
+        </label>
+      </div>
+      <div class="split">
+        <div class="table-wrap">
+          <table class="data-table" id="findings-table">
+            <caption class="sr-only">Findings by severity</caption>
+            <thead>
+              <tr><th scope="col">Severity</th><th scope="col">Title</th><th scope="col">Confidence</th>
+                  <th scope="col">Status</th><th scope="col">Created</th></tr>
+            </thead>
+            <tbody id="findings-body"></tbody>
+          </table>
+          <div class="empty-state compact" id="findings-empty" hidden>
+            <p>No findings recorded yet.</p>
+          </div>
+        </div>
+        <aside class="detail-pane" id="finding-detail" aria-live="polite">
+          <p class="muted">Select a finding row to view its body and evidence anchors.</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================= ASSETS ============================= -->
+    <section class="panel" id="panel-assets" role="tabpanel" aria-labelledby="tab-assets" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Shared asset graph</h2>
+          <p class="section-sub"><span id="assets-count">0</span> assets discovered</p>
+        </div>
+        <div class="section-actions">
+          <label class="field inline" for="asset-search">
+            <span class="field-label">Search</span>
+            <input id="asset-search" class="input" type="search" placeholder="Filter value…">
+          </label>
+          <label class="field inline" for="asset-filter">
+            <span class="field-label">Kind</span>
+            <select id="asset-filter" class="select">
+              <option value="">All</option>
+              <option value="root_domain">Root domain</option>
+              <option value="subdomain">Subdomain</option>
+              <option value="host">Host</option>
+              <option value="ip">IP</option>
+              <option value="service">Service</option>
+              <option value="endpoint">Endpoint</option>
+              <option value="app">App</option>
+              <option value="credential">Credential</option>
+              <option value="artifact">Artifact</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="assets-table">
+          <caption class="sr-only">Discovered assets</caption>
+          <thead>
+            <tr><th scope="col">Kind</th><th scope="col">Value</th><th scope="col">First seen</th>
+                <th scope="col">Last seen</th></tr>
+          </thead>
+          <tbody id="assets-body"></tbody>
+        </table>
+        <div class="empty-state compact" id="assets-empty" hidden>
+          <p>No assets discovered yet.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ TIMELINE ============================ -->
+    <section class="panel" id="panel-timeline" role="tabpanel" aria-labelledby="tab-timeline" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Live timeline</h2>
+          <p class="section-sub"><span id="timeline-count">0</span> events ·
+            <span id="sse-status">stream offline</span></p>
+        </div>
+        <div class="section-actions wrap">
+          <label class="field inline" for="timeline-filter">
+            <span class="field-label">Filter</span>
+            <input id="timeline-filter" class="input" type="search" placeholder="type, message, task…">
+          </label>
+          <label class="field inline" for="timeline-type">
+            <span class="field-label">Type</span>
+            <select id="timeline-type" class="select">
+              <option value="">All types</option>
+            </select>
+          </label>
+          <label class="check" for="timeline-autoscroll">
+            <input id="timeline-autoscroll" type="checkbox" checked> Auto-scroll
+          </label>
+          <button id="timeline-pause" class="btn ghost" type="button" aria-pressed="false">Pause</button>
+          <button id="timeline-clear" class="btn ghost" type="button">Clear</button>
+        </div>
+      </div>
+      <ol class="timeline" id="timeline-log" aria-live="polite" aria-relevant="additions"></ol>
+      <div class="empty-state compact" id="timeline-empty">
+        <p>No events yet. The stream connects automatically when a project is selected.</p>
+      </div>
+    </section>
+
+    <!-- ============================= TODOS ============================= -->
+    <section class="panel" id="panel-todos" role="tabpanel" aria-labelledby="tab-todos" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Todo chain</h2>
+          <p class="section-sub"><span id="todos-count">0</span> items in the shared plan</p>
+        </div>
+      </div>
+      <ul class="todo-list" id="todos-list"></ul>
+      <div class="empty-state compact" id="todos-empty">
+        <p>The planner has not published a todo chain yet.</p>
+      </div>
+    </section>
+
+    <!-- ============================ REPORT ============================ -->
+    <section class="panel" id="panel-report" role="tabpanel" aria-labelledby="tab-report" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Engagement report</h2>
+          <p class="section-sub" id="report-meta">Latest generated report</p>
+        </div>
+        <div class="section-actions">
+          <button class="btn ghost" id="btn-report-reload" type="button">Reload</button>
+          <a class="btn ghost" id="report-open" href="#" target="_blank" rel="noopener noreferrer"
+             aria-disabled="true">Open in new tab</a>
+          <a class="btn ghost" id="report-markdown" href="#" aria-disabled="true">Raw markdown</a>
+        </div>
+      </div>
+      <div class="report-frame-wrap">
+        <div class="empty-state compact" id="report-empty">
+          <p>No report yet. It is generated when a run completes.</p>
+        </div>
+        <iframe id="report-frame" class="report-frame" title="ARIA-X engagement report"
+                sandbox="allow-same-origin" hidden></iframe>
+      </div>
+    </section>
+
+    <!-- =========================== SETTINGS =========================== -->
+    <section class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden>
+      <div class="section-head">
+        <div>
+          <h2 class="section-title">Settings</h2>
+          <p class="section-sub">Public configuration, scope and console preferences</p>
+        </div>
+        <button class="btn ghost" id="settings-refresh" type="button">Reload config</button>
+      </div>
+      <div class="grid two">
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">Scope</h2></div>
+          <dl class="kv" id="settings-scope"><dt>—</dt><dd>—</dd></dl>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">Console access</h2></div>
+          <p class="muted">If the server was started with an auth token, paste it here. It is stored
+            only in this browser's localStorage and sent as a Bearer token.</p>
+          <label class="field" for="token-input">
+            <span class="field-label">Bearer token</span>
+            <input id="token-input" class="input" type="password" autocomplete="off"
+                   placeholder="paste token…">
+          </label>
+          <div class="button-row">
+            <button class="btn" id="btn-token-save" type="button">Save token</button>
+            <button class="btn ghost" id="btn-token-clear" type="button">Clear</button>
+          </div>
+          <label class="field" for="poll-interval">
+            <span class="field-label">Refresh interval</span>
+            <select id="poll-interval" class="select">
+              <option value="2000">2 seconds</option>
+              <option value="3000" selected>3 seconds</option>
+              <option value="5000">5 seconds</option>
+              <option value="10000">10 seconds</option>
+            </select>
+          </label>
+        </section>
+      </div>
+      <div class="grid two">
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">Public config</h2></div>
+          <pre class="code-block" id="settings-config">Loading…</pre>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2 class="card-title">Tool catalog</h2></div>
+          <div id="settings-tools" class="tool-list"><p class="muted">Loading…</p></div>
+          <p class="muted small" id="settings-version">ARIA-X</p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

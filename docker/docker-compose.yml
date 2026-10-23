@@ -1,0 +1,64 @@
+# ARIA-X console + optional Kali sandbox.
+#
+#   cp .env.example .env        # or export ARIA_X_AUTH_TOKEN
+#   docker compose -f docker/docker-compose.yml up --build
+#   open http://127.0.0.1:8787
+#
+# The console is published on loopback only. Set ARIA_X_AUTH_TOKEN to anything
+# long and random before exposing this to a shared machine.
+name: aria-x
+
+services:
+  aria-x:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: aria-x:0.1.0
+    container_name: aria-x-console
+    restart: unless-stopped
+    # Match the host owner of ../data and ../runs (see docker/README below).
+    user: "${ARIA_X_UID:-10001}:${ARIA_X_GID:-10001}"
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      ARIA_X_AUTH_TOKEN: "${ARIA_X_AUTH_TOKEN:-change-me-before-use}"
+      ARIA_X_DATA_DIR: /app/data
+      ARIA_X_LOG_LEVEL: "${ARIA_X_LOG_LEVEL:-INFO}"
+      ARIA_X_PROVIDER: "${ARIA_X_PROVIDER:-openai}"
+      ARIA_X_BASE_URL: "${ARIA_X_BASE_URL:-https://api.deepseek.com/v1}"
+      ARIA_X_MODEL: "${ARIA_X_MODEL:-deepseek-chat}"
+      ARIA_X_API_KEY: "${ARIA_X_API_KEY:-}"
+      ARIA_X_SANDBOX: "${ARIA_X_SANDBOX:-local}"
+    volumes:
+      - ../data:/app/data
+      - ../runs:/app/runs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8787/api/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional Kali tooling container. It is NOT started by default
+  # (profile: sandbox) and it is NOT attached to the ARIA-X container: ARIA-X's
+  # docker sandbox launches one-shot containers from the host Docker daemon.
+  # Read docker/kali-sandbox.md first; mounting the Docker socket is powerful.
+  kali-base:
+    image: kalilinux/kali-rolling
+    profiles: ["sandbox"]
+    command: ["sleep", "infinity"]
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

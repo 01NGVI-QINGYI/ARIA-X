@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a scoped improvement to ARIA-X
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do, and what currently blocks you?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest change that would solve the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Project boundaries
+      options:
+        - label: This request is for local, non-offensive research use and respects the project's usage boundaries.
+          required: true
+        - label: I have removed secrets, personal data and private target details from this request.
+          required: true

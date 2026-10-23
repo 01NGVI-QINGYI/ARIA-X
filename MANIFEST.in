@@ -1,0 +1,8 @@
+include README.md README.en.md LICENSE NOTICE.md THIRD_PARTY.md CHANGELOG.md
+include CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md CITATION.cff
+recursive-include docs *.md
+recursive-include configs *.toml
+recursive-include examples *.py *.json *.toml
+recursive-include scripts *.sh
+recursive-include assets *.svg *.png
+recursive-include tests *.py

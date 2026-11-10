@@ -12,6 +12,5 @@
               fill="none" stroke="url(#aria-x-mark)" stroke-width="2" stroke-linejoin="round"/>
         <path d="M22 11v22M13 22h18" stroke="url(#aria-x-mark)" stroke-width="1.4" opacity=".55"/>
         <circle cx="22" cy="22" r="4.2" fill="url(#aria-x-mark)"/>
-        <circle cx="22" cy="22" r="12" fill="none" stroke="url(#aria-x-mark)" stroke-width=".8"
-                stroke-dasharray="2 4" opacity=".6"/>
+        <path d="M22.000 10.800 L22.000 10.000 M27.600 12.301 L28.000 11.608 M31.699 16.400 L32.392 16.000 M33.200 22.000 L34.000 22.000 M31.699 27.600 L32.392 28.000 M27.600 31.699 L28.000 32.392 M22.000 33.200 L22.000 34.000 M16.400 31.699 L16.000 32.392 M12.301 27.600 L11.608 28.000 M10.800 22.000 L10.000 22.000 M12.301 16.400 L11.608 16.000 M16.400 12.301 L16.000 11.608" fill="none" stroke="url(#aria-x-mark)" stroke-width=".8" stroke-linecap="butt" opacity=".6"/>
       </svg>

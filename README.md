@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/logo.svg" width="110" alt="ARIA-X 控制台统一盾牌标志">
+  <img src="assets/console-shield-logo.svg" width="110" alt="ARIA-X 控制台统一盾牌标志">
 </p>
 
 <h1 align="center">ARIA-X</h1>

@@ -4,11 +4,11 @@
 # works from a fully offline Docker build context (given a local base image).
 #
 # Build from the repository root:
-#   docker build -f docker/Dockerfile -t aria-x:0.1.0 .
+#   docker build -f docker/Dockerfile -t aria-x:0.1.1 .
 # Run (loopback-published, token-protected):
 #   docker run --rm -p 127.0.0.1:8787:8787 \
 #     -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
-#     -v "$PWD/data:/app/data" aria-x:0.1.0
+#     -v "$PWD/data:/app/data" aria-x:0.1.1
 #
 # The container cannot reach host files except the mounted data volume. Target
 # traffic still needs network access; see docker/kali-sandbox.md before enabling

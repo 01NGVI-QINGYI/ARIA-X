@@ -143,6 +143,7 @@ class ToolContext:
     delegate: Callable[[str, str], str] | None = None
     cancel: Any = None
     request_approval: Callable[[str, dict[str, Any], str, str], bool] | None = None
+    sessions: Any = None
 
     def child(self, **overrides: Any) -> "ToolContext":
         data = {
@@ -151,7 +152,7 @@ class ToolContext:
             "events": self.events, "scope": self.scope, "sandbox": self.sandbox,
             "workdir": self.workdir, "budget": self.budget, "approvals": self.approvals,
             "delegate": self.delegate, "cancel": self.cancel,
-            "request_approval": self.request_approval,
+            "request_approval": self.request_approval, "sessions": self.sessions,
         }
         data.update(overrides)
         return ToolContext(**data)

@@ -192,13 +192,13 @@ python -m aria_x serve --host 127.0.0.1 --port 8787
 ### 6.1 构建与运行
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.1.0 .
+docker build -f docker/Dockerfile -t aria-x:0.1.1 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.1.0
+  aria-x:0.1.1
 ```
 
 镜像只包含 ARIA-X 本体（标准库），**不包含**扫描工具。镜像默认以 UID 10001 的非 root 用户运行；
@@ -291,7 +291,7 @@ schema 不兼容，保留备份并查阅 release notes。
 # 停止进程后
 rm -rf data runs                      # ⚠️ 会删除全部 engagement 状态与报告
 docker ps -a --filter name=aria-x- --format '{{.ID}}' | xargs -r docker rm -f
-docker image rm aria-x:0.1.0 aria-x-kali:latest 2>/dev/null || true
+docker image rm aria-x:0.1.1 aria-x-kali:latest 2>/dev/null || true
 ```
 
 删除前请确认路径，避免误删其他项目。

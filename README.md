@@ -25,8 +25,8 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-202%20passing-brightgreen">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.1.0-orange">
+  <img alt="tests" src="https://img.shields.io/badge/tests-217%20passing-brightgreen">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.1.1-orange">
 </p>
 
 ---
@@ -105,7 +105,7 @@ flowchart TB
         direction TB
         ST["统一状态层<br/>SQLite：nodes / edges / assets / todos / traces"]
         OR["统一编排层<br/>bootstrap → reason → explore → persist → report"]
-        EX["统一执行层<br/>22 个工具 · scope · 审批 · 沙箱 · 审计"]
+        EX["统一执行层<br/>27 个工具 · scope · 审批 · 沙箱 · 审计"]
         LM["统一模型层<br/>ModelRouter · providers · roles"]
     end
 
@@ -423,11 +423,12 @@ max_idle_rounds = 2
 
 ---
 
-## 工具（22 个）
+## 工具（27 个）
 
 | 类别 | 工具 | 风险 |
 | --- | --- | --- |
 | 终端 / 文件 | `terminal_exec`(high)、`file_read`(medium)、`file_write`(high)、`file_list`(low) | 沙箱 + 路径 jail |
+| **交互会话（PTY）** | `session_open`(high)、`session_send`(high)、`session_read`、`session_close`、`session_list` | 驱动 msfconsole / ssh / 反弹 shell |
 | 网络（scope） | `http_request`、`dns_lookup`、`port_scan`(high)、`tls_probe`、`web_probe` | 逐次 scope 授权 |
 | 外部研究 | `web_search` | 不接触目标 |
 | 黑板 | `add_fact`、`add_finding`、`add_asset`、`anchor_node`、`graph_query` | 图写入 |
@@ -544,13 +545,13 @@ findings.json    # 发现的结构化导出
 ## Docker
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.1.0 .
+docker build -f docker/Dockerfile -t aria-x:0.1.1 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.1.0
+  aria-x:0.1.1
 ```
 
 或：
@@ -575,7 +576,7 @@ bash scripts/dev.sh test        # 只跑单元测试
 bash scripts/dev.sh doctor      # 环境自检
 ```
 
-当前状态：**202 个测试**，在 Python 3.11.14 与 3.12.12 上均通过；`verify.sh` 退出码 0。
+当前状态：**217 个测试**，在 Python 3.11.14 与 3.12.12 上均通过；`verify.sh` 退出码 0。
 
 `scripts/verify.sh` 的 Python 发现顺序：`$ARIA_X_PYTHON` → `python3.12` → `python3.11` → 满足 ≥3.11 的 `python3`。
 不执行任何 `pip install`。
@@ -596,13 +597,13 @@ ARIA-X/
 │   ├── store/                 # SQLite schema 与 DAO
 │   ├── engine/                # 预算、调度、上下文、orchestrator、engagement
 │   ├── agents/                # Agent 循环、角色、prompts、workers
-│   ├── tools/                 # 22 个工具、scope、沙箱、审批门
+│   ├── tools/                 # 27 个工具、scope、沙箱、审批门
 │   ├── llm/                   # provider、router、mock、scenario、JSON 修复
 │   ├── memory/                # 零依赖 TF-IDF 检索（CJK）
 │   ├── report/                # Markdown / HTML / findings.json
 │   ├── server/                # ThreadingHTTPServer API + SSE
 │   └── web/                   # 零 CDN 控制台（HTML/CSS/JS）
-├── tests/                     # 202 个单元/集成测试
+├── tests/                     # 217 个单元/集成测试
 ├── examples/                  # 本机脆弱靶场、demo 配置、scenario
 ├── configs/                   # 示例配置
 ├── docs/                      # 架构、融合、工具、安全、部署、路线图
@@ -666,11 +667,11 @@ ARIA-X 以 **GNU Affero General Public License v3.0（AGPL-3.0-or-later）** 发
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 模块、数据流、数据模型、HTTP API、事件 |
 | [docs/FUSION.md](docs/FUSION.md) | 与 ARTEX / Cairn / PentAGI 的逐项映射与取舍 |
-| [docs/TOOLS.md](docs/TOOLS.md) | 22 个工具的参数、风险、scope 行为与示例 |
+| [docs/TOOLS.md](docs/TOOLS.md) | 27 个工具的参数、风险、scope 行为与示例 |
 | [docs/SECURITY.md](docs/SECURITY.md) | 技术防护、威胁模型、秘密处理、披露流程 |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 本地/容器部署、模型接入、沙箱、排障 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 已实现 / 下一步 / 明确不做 |
-| [CHANGELOG.md](CHANGELOG.md) | v0.1.0 变更记录 |
+| [CHANGELOG.md](CHANGELOG.md) | 变更记录 |
 | [docs/CONTRACTS.md](docs/CONTRACTS.md) | 内部构建契约（开发参考） |
 | [docs/GITHUB.md](docs/GITHUB.md) | GitHub About、topics 与发布清单 |
 
@@ -731,5 +732,5 @@ ARIA-X 以 **GNU Affero General Public License v3.0（AGPL-3.0-or-later）** 发
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.1.0 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · 仅供本地隔离环境学习与研究</sub>
+  <sub>ARIA-X v0.1.1 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · 仅供本地隔离环境学习与研究</sub>
 </p>

@@ -179,6 +179,51 @@ class EngineTestBase(unittest.TestCase):
         self.addCleanup(engagement.close)
         return engagement, store, events
 
+class SessionCleanupTests(EngineTestBase):
+    """A run must never leave an interactive session (a shell) behind."""
+
+    def test_sessions_opened_by_a_worker_are_reaped_at_run_end(self) -> None:
+        try:
+            import pty  # noqa: F401
+        except ImportError:  # pragma: no cover
+            self.skipTest("PTY sessions require a POSIX platform")
+
+        config = self.make_config(bootstrap=False)
+        engagement, store, events = self.make_engagement(config)
+        project = engagement.create_project("Session cleanup", "Open a shell and finish")
+        opened: list[str] = []
+
+        from aria_x.tools.builtin import build_registry
+
+        def worker(ctx: Any, intent_text: str) -> dict[str, Any]:
+            registry = build_registry(ctx)
+            result = registry.execute("session_open", {"command": "bash --norc"}, ctx)
+            self.assertTrue(result.ok, result.error)
+            opened.append(result.data["session_id"])
+            return worker_payload(intent_text)
+
+        script = WorkerScript([INTENTS_PLAN, COMPLETE_PLAN], worker=worker,
+                              worker_takes_ctx=True)
+        with fake_workers(script):
+            result = engagement.run(project.id)
+
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(len(opened), 2)
+        # The orchestrator closed every session before returning.
+        self.assertFalse(any(_pid_alive(sid) for sid in opened))
+
+
+def _pid_alive(session_id: str) -> bool:
+    """Best-effort check: no process should still mention the session id."""
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-Ao", "command"], capture_output=True, text=True,
+                             timeout=5).stdout
+    except Exception:
+        return False
+    return session_id in out
+
+
 class EngineTests(EngineTestBase):
     # -- tests ----------------------------------------------------------
 

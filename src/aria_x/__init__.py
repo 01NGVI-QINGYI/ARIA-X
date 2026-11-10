@@ -15,7 +15,7 @@ The public entry points are :mod:`aria_x.cli`, :mod:`aria_x.engine` and
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __codename__ = "ARIA-X"
 __license__ = "AGPL-3.0-or-later"
 

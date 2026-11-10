@@ -25,8 +25,8 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-202%20passing-brightgreen">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.1.0-orange">
+  <img alt="tests" src="https://img.shields.io/badge/tests-217%20passing-brightgreen">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.1.1-orange">
 </p>
 
 ---
@@ -115,7 +115,7 @@ flowchart TB
         direction TB
         ST["Unified state<br/>SQLite: nodes / edges / assets / todos / traces"]
         OR["Unified orchestration<br/>bootstrap → reason → explore → persist → report"]
-        EX["Unified execution<br/>22 tools · scope · approval · sandbox · audit"]
+        EX["Unified execution<br/>27 tools · scope · approval · sandbox · audit"]
         LM["Unified model layer<br/>ModelRouter · providers · roles"]
     end
 
@@ -442,11 +442,12 @@ Environment variables: `ARIA_X_PROVIDER`, `ARIA_X_BASE_URL`, `ARIA_X_API_KEY`, `
 
 ---
 
-## Tools (22)
+## Tools (27)
 
 | Category | Tools | Risk |
 | --- | --- | --- |
 | Terminal / files | `terminal_exec` (high), `file_read` (medium), `file_write` (high), `file_list` (low) | Sandbox + path jail |
+| **Interactive sessions (PTY)** | `session_open` (high), `session_send` (high), `session_read`, `session_close`, `session_list` | Drive msfconsole / ssh / reverse shells |
 | Network (scope) | `http_request`, `dns_lookup`, `port_scan` (high), `tls_probe`, `web_probe` | Per-call scope authorization |
 | External research | `web_search` | Does not touch the target |
 | Blackboard | `add_fact`, `add_finding`, `add_asset`, `anchor_node`, `graph_query` | Graph writes |
@@ -569,13 +570,13 @@ Alongside:
 ## Docker
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.1.0 .
+docker build -f docker/Dockerfile -t aria-x:0.1.1 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.1.0
+  aria-x:0.1.1
 ```
 
 Or:
@@ -601,7 +602,7 @@ bash scripts/dev.sh test        # unit tests only
 bash scripts/dev.sh doctor      # environment self-check
 ```
 
-Current status: **202 tests**, passing on Python 3.11.14 and 3.12.12; `verify.sh` exits 0.
+Current status: **217 tests**, passing on Python 3.11.14 and 3.12.12; `verify.sh` exits 0.
 
 `scripts/verify.sh` discovers Python in this order: `$ARIA_X_PYTHON` → `python3.12` → `python3.11` → any `python3` ≥3.11.
 It never runs `pip install`.
@@ -622,13 +623,13 @@ ARIA-X/
 │   ├── store/                 # SQLite schema and DAO
 │   ├── engine/                # budget, scheduler, context, orchestrator, engagement
 │   ├── agents/                # agent loop, roles, prompts, workers
-│   ├── tools/                 # 22 tools, scope, sandbox, approval gate
+│   ├── tools/                 # 27 tools, scope, sandbox, approval gate
 │   ├── llm/                   # providers, router, mock, scenario, JSON repair
 │   ├── memory/                # zero-dependency TF-IDF retrieval (CJK-aware)
 │   ├── report/                # Markdown / HTML / findings.json
 │   ├── server/                # ThreadingHTTPServer API + SSE
 │   └── web/                   # zero-CDN console (HTML/CSS/JS)
-├── tests/                     # 202 unit/integration tests
+├── tests/                     # 217 unit/integration tests
 ├── examples/                  # local vulnerable target, demo config, scenario
 ├── configs/                   # example configuration
 ├── docs/                      # architecture, fusion, tools, security, deployment, roadmap
@@ -697,11 +698,11 @@ MIT text and copyright notice are reproduced in [THIRD_PARTY.md](THIRD_PARTY.md)
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Modules, data flow, data model, HTTP API, events |
 | [docs/FUSION.md](docs/FUSION.md) | Item-by-item mapping and trade-offs vs ARTEX / Cairn / PentAGI |
-| [docs/TOOLS.md](docs/TOOLS.md) | Parameters, risk and scope behavior of all 22 tools |
+| [docs/TOOLS.md](docs/TOOLS.md) | Parameters, risk and scope behavior of all 27 tools |
 | [docs/SECURITY.md](docs/SECURITY.md) | Technical safeguards, threat model, secrets, disclosure |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Local/container deployment, model setup, sandbox, troubleshooting |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Implemented / next / deliberately not doing |
-| [CHANGELOG.md](CHANGELOG.md) | v0.1.0 change log |
+| [CHANGELOG.md](CHANGELOG.md) | Change log |
 | [docs/CONTRACTS.md](docs/CONTRACTS.md) | Internal build contracts (development reference) |
 | [docs/GITHUB.md](docs/GITHUB.md) | GitHub About, topics and release checklist |
 
@@ -773,5 +774,5 @@ entire section; if you do not agree, stop immediately and delete all copies.
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.1.0 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · local, isolated study and research only</sub>
+  <sub>ARIA-X v0.1.1 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · local, isolated study and research only</sub>
 </p>

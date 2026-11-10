@@ -16,11 +16,16 @@
 > 但它不是运行时沙箱。真正的隔离来自 `sandbox.backend`（Docker）与 `Scope`；
 > `critical` 目前没有内置工具使用。
 
-## 总表（22 个）
+## 总表（27 个）
 
 | 名称 | 风险 | Scope | 必需参数 | 作用 |
 | --- | --- | --- | --- | --- |
 | `terminal_exec` | high | 命令启发式 | `command` | 沙箱内执行一条 shell 命令 |
+| `session_open` | high | 命令启发式 | `command` | 启动持久交互会话（PTY） |
+| `session_send` | high | 命令启发式 | `session_id` | 向会话输入文本并取回输出 |
+| `session_read` | medium | — | `session_id` | 读取会话新增输出 |
+| `session_close` | low | — | `session_id` | 关闭会话并回收进程组 |
+| `session_list` | low | — | — | 列出当前会话 |
 | `file_read` | medium | — | `path` | 读取 workdir 内 UTF-8 文件 |
 | `file_write` | high | — | `path`, `content` | 写入 workdir 内文件 |
 | `file_list` | low | — | — | 列出 workdir 内目录 |
@@ -80,6 +85,39 @@
 
 - 列出目录项（名称、类型、大小）；默认 workdir；
 - 只读，低风险。
+
+## 交互会话（PTY）
+
+`terminal_exec` 是"执行一条命令拿回结果"；遇到需要终端语义的程序（`msfconsole`、`ssh`、
+数据库 REPL、`nc` 反弹 shell）它就不够用了。会话工具补上这一层。
+
+| 工具 | 说明 |
+| --- | --- |
+| `session_open(command, name?, cwd?)` | 用 PTY 启动一个持久进程，返回 `session_id` 与初始 banner |
+| `session_send(session_id, text?, newline?, wait_ms?)` | 输入文本并取回 `wait_ms` 内的输出；`text` 省略表示按回车 |
+| `session_read(session_id, wait_ms?)` | 只读新增输出，用于轮询异步打印 |
+| `session_close(session_id)` | 先发 `exit`，再 SIGTERM，最后 SIGKILL；返回退出码与最终输出 |
+| `session_list()` | 列出会话的 id / 名称 / 存活 / 空闲秒数 / 缓冲字节数 |
+
+约束与保证：
+
+- **同一套护栏**：`session_open` 的命令与 `session_send` 的文本都要过 `CommandPolicy`
+  和 scope 启发式——会话不是绕过检查的后门；
+- **有界**：单次运行最多 4 个会话，单会话输出缓冲 256 KB，单次读取返回 8 KB；
+- **自动回收**：空闲超过 30 分钟的会话在下一次会话操作时被清扫；运行结束（含异常、取消、
+  预算耗尽）时 `Orchestrator` 会 `close_all()`，不留下孤儿 shell；
+- **Docker 后端**：会话通过 `docker run -i -t` 启动，容器同样获得 TTY，关闭时 `docker kill` 兜底；
+- **审批**：`session_open` / `session_send` 是 `high` 风险，`safety.approval="ask"` 时需要人工批准。
+
+典型用法：
+
+```text
+session_open("msfconsole -q")            -> s_ab12cd34ef
+session_send(s_ab12cd34ef, "use auxiliary/scanner/http/http_version")
+session_send(s_ab12cd34ef, "set RHOSTS 10.0.0.5")
+session_send(s_ab12cd34ef, "run", wait_ms=5000)
+session_close(s_ab12cd34ef)
+```
 
 ## 网络（scope 强制）
 

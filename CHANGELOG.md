@@ -3,6 +3,33 @@
 All notable changes to ARIA-X are documented here. ARIA-X is pre-1.0; interfaces may
 change, but persisted schema changes will include a migration note.
 
+## [0.1.1] — 2026-11-10
+
+### Added
+
+- **Interactive sessions (PTY)**: `session_open`, `session_send`, `session_read`,
+  `session_close` and `session_list`. Agents can now drive programs that need a real
+  terminal — `msfconsole`, `ssh`, database REPLs and reverse shells — instead of being
+  limited to one-shot `terminal_exec` calls.
+  - Same guardrails as `terminal_exec`: `CommandPolicy` and the scope heuristic run on
+    both the spawn command and every `send`, so a session cannot be used to smuggle an
+    out-of-scope target past the checks.
+  - Bounded: four concurrent sessions per run, 256 KB per-session buffer, 8 KB per read,
+    idle sweep after 30 minutes, and `close_all()` on every terminal run path so no
+    orphan shell survives a cancelled or failed engagement.
+  - `session_open` / `session_send` are `high` risk and therefore gated by
+    `safety.approval` in `ask` / `deny` mode.
+  - Docker backend spawns `docker run -i -t` so the container gets a TTY too.
+- 14 new tests covering lifecycle, state persistence, policy/scope refusals on both open
+  and send, the session ceiling, idle sweep, audit/trace recording and fail-closed
+  behaviour when no manager is attached.
+
+### Changed
+
+- Tool catalog grows from 22 to 27 tools; worker, bootstrap and coder roles can use the
+  session tools.
+- Version bumped to 0.1.1.
+
 ## [0.1.0] — 2026-10-22
 
 First integrated release. ARIA-X fuses the blackboard search model of **Cairn**,

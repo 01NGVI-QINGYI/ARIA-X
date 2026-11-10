@@ -7,7 +7,7 @@ abstract: >-
   and specialist delegation in one standard-library-only Python implementation.
 authors:
   - name: "01NGVI-QINGYI"
-version: "0.1.0"
+version: "0.1.1"
 date-released: "2026-10-23"
 license: "AGPL-3.0-or-later"
 repository-code: "https://github.com/01NGVI-QINGYI/ARIA-X"

@@ -33,6 +33,11 @@ from .base import AgentSpec
 #: Tools that observe the target or the environment. Workers own these.
 RECON_TOOLS: tuple[str, ...] = (
     "terminal_exec",
+    "session_open",
+    "session_send",
+    "session_read",
+    "session_close",
+    "session_list",
     "file_read",
     "file_write",
     "file_list",
@@ -86,7 +91,8 @@ PLANNER_TOOLS: tuple[str, ...] = (
 #: a specialist, so a specialist must not delegate further.
 SPECIALIST_TOOLS: dict[str, tuple[str, ...]] = {
     "researcher": ("http_request", "web_search", "web_probe", "file_read"),
-    "coder": ("terminal_exec", "file_read", "file_write", "file_list"),
+    "coder": ("terminal_exec", "session_open", "session_send", "session_read",
+              "session_close", "session_list", "file_read", "file_write", "file_list"),
     "adviser": ("graph_query", "search_traces", "memory_search"),
     "memorist": ("graph_query", "search_traces", "memory_search"),
 }

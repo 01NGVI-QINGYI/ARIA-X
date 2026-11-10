@@ -19,7 +19,7 @@
 │        ├─ Budget (engine/budget.py)                               │
 │        ├─ agents: planner / bootstrap / workers / specialists /   │
 │        │          reporter (agents/)                              │
-│        ├─ ToolRegistry + 22 tools (tools/)                        │
+│        ├─ ToolRegistry + 27 tools (tools/)                        │
 │        ├─ ModelRouter + providers (llm/)                          │
 │        └─ report renderer (report/)                               │
 ├──────────────────────────────────────────────────────────────────┤
@@ -38,7 +38,7 @@
 | `src/aria_x/store/` | SQLite schema、迁移、CRUD、图查询、审批、审计、导出 |
 | `src/aria_x/events.py` | 线程安全 EventBus、SSE 重放缓冲、JSONL sink、事件类型常量 |
 | `src/aria_x/llm/` | `ChatMessage` / `LLMResponse` / provider 协议、OpenAI 兼容、Anthropic、Mock、Scenario、JSON 契约校验、ModelRouter |
-| `src/aria_x/tools/` | ToolSpec/Result/Registry/Context、Scope、Sandbox、terminal/file/net/knowledge 工具 |
+| `src/aria_x/tools/` | ToolSpec/Result/Registry/Context、Scope、Sandbox、terminal/file/net/knowledge 工具、PTY 会话管理 |
 | `src/aria_x/agents/` | Agent 运行时、角色提示词、planner/worker/bootstrap/specialist/reporter 规格 |
 | `src/aria_x/engine/` | Budget、Scheduler、Orchestrator、Engagement |
 | `src/aria_x/memory/retrieval.py` | 零依赖 TF-IDF 索引与检索（节点、轨迹） |

@@ -13,7 +13,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: aria-x:0.1.0
+    image: aria-x:0.1.1
     container_name: aria-x-console
     restart: unless-stopped
     # Match the host owner of ../data and ../runs (see docker/README below).

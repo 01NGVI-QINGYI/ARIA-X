@@ -12,12 +12,13 @@ registry itself always exposes the full catalog.
 
 from __future__ import annotations
 
-from . import knowledge, net, terminal
+from . import knowledge, net, session, terminal
 from .base import ToolContext, ToolRegistry
 
 #: Exact tool names promised by the contracts document (§4).
 TOOL_NAMES: tuple[str, ...] = (
-    "terminal_exec", "file_read", "file_write", "file_list",
+    "terminal_exec", "session_open", "session_send", "session_read", "session_close",
+    "session_list", "file_read", "file_write", "file_list",
     "http_request", "dns_lookup", "port_scan", "tls_probe", "web_probe", "web_search",
     "add_fact", "add_finding", "add_asset", "anchor_node", "graph_query", "search_traces",
     "memory_store", "memory_search", "todo_update", "prove_goal",
@@ -27,6 +28,7 @@ TOOL_NAMES: tuple[str, ...] = (
 #: Read-only tools are safe for reporters and other non-mutating roles.
 READ_ONLY_TOOLS: tuple[str, ...] = (
     "file_read", "file_list", "dns_lookup", "tls_probe", "web_search", "graph_query",
+    "session_read", "session_list",
     "search_traces", "memory_search", "scope_check",
 )
 
@@ -39,6 +41,7 @@ def build_registry(ctx: ToolContext | None = None) -> ToolRegistry:
     """
     registry = ToolRegistry()
     terminal.register(registry)
+    session.register(registry)
     net.register(registry)
     knowledge.register(registry)
     return registry

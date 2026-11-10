@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aria-x"
-version = "0.1.0"
+version = "0.1.1"
 description = "ARIA-X — Autonomous Reasoning & Investigation Agent, eXtended: state-space security research engine fusing ARTEX, Cairn and PentAGI"
 readme = "README.md"
 requires-python = ">=3.11"

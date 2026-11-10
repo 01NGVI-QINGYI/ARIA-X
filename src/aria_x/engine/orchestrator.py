@@ -48,6 +48,7 @@ from ..models import (
 )
 from ..store import Store
 from ..tools.base import ToolContext, ToolRegistry
+from ..tools.session import SessionManager
 from ..tools.sandbox import Sandbox, build_sandbox
 from ..tools.scope import Scope
 from ..util import first_line, json_dumps, new_id, now_iso, truncate
@@ -146,6 +147,14 @@ class Orchestrator:
                     self.scheduler.shutdown(wait=True)
                 except Exception:
                     pass
+            # A leaked PTY is a leaked shell: always reap sessions before the
+            # run is reported as finished.
+            try:
+                closed = self.sessions.close_all()
+                if closed:
+                    self._emit(LOG, {"message": f"closed {closed} interactive session(s)"})
+            except Exception:
+                pass
         return self._finalize(status, summary, error)
 
     # ------------------------------------------------------------------
@@ -183,6 +192,7 @@ class Orchestrator:
             run_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+        self.sessions = SessionManager()
         self.workdir = Path(self.config.sandbox.workdir) if self.config.sandbox.workdir \
             else run_dir / "work"
         self.sandbox = self._sandbox_override or build_sandbox(self.config.sandbox, self.workdir)
@@ -194,6 +204,7 @@ class Orchestrator:
             budget=self.budget, cancel=self.cancel,
             delegate=self._delegate_for("orchestrator"),
             request_approval=self._approval_for("orchestrator"),
+            sessions=self.sessions,
         )
         self.registry = self._registry_override or self._build_registry(base_ctx)
         self.goal_node = self._ensure_goal_node()
@@ -898,6 +909,7 @@ class Orchestrator:
             workdir=self.workdir, budget=self.budget, cancel=self.cancel,
             delegate=self._delegate_for(task.id),
             request_approval=self._approval_for(task.id),
+            sessions=self.sessions,
         )
 
     def _delegate_for(self, task_id: str) -> Callable[..., str]:

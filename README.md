@@ -10,7 +10,7 @@
 
 <p align="center">
   <strong>Autonomous Reasoning &amp; Investigation Agent, eXtended</strong><br>
-  面向本地与隔离环境安全研究的自主推理与验证编排引擎
+  从自主推理到可核验的发现：安全研究、执行编排与证据报告一体化
 </p>
 
 <p align="center">
@@ -31,44 +31,18 @@
 
 ---
 
-## 致谢与思想来源
-
-ARIA-X 的核心架构并非凭空构建，而是提炼并重组了三个开源项目的**设计思想与工程纪律**，同时补齐了统一的持久化状态层与安全边界。向以下原作者与团队致谢：
-
-| 上游项目 | 原作者 / 团队 | ARIA-X 借鉴的核心思想 | 许可证 |
-| :--- | :--- | :--- | :--- |
-| **ARTEX** | [Autumn-27](https://github.com/Autumn-27)（原仓库 `Autumn-27/ARTEX` 已于 2026-10 由作者移除） | 探索图与共享资产图分离的双图架构；Planner 作为唯一意图生成器；跨唤醒周期的 Todo 链；跨 Worker 过程轨迹；高风险工具审批门；图驱动报告 | **AGPL-3.0** |
-| **Cairn** | [起零衍迹 / oritera](https://github.com/oritera) | `Fact / Intent / Hint` 黑板模型；`bootstrap → reason → explore` 状态空间搜索；无固定角色的 OODA Worker；以“事实”而非“任务清单”为中心 | **AGPL-3.0** |
-| **PentAGI** | [VXControl](https://github.com/vxcontrol) | `researcher / coder / adviser / memorist` 专家分工；多模型 Provider 抽象；沙箱化终端；分层记忆；将复杂子问题委托给窄能力子代理 | **MIT** |
-
-原作者的相关仓库（一并致谢）：
-- [Norma](https://github.com/Autumn-27/Norma)（ARTEX 使用的 Agent SDK）· [ScopeSentry](https://github.com/Autumn-27/ScopeSentry)（资产与范围测绘系统）
-- [oritera/Cairn](https://github.com/oritera/Cairn)（Cairn 主仓库）· [vxcontrol/pentagi](https://github.com/vxcontrol/pentagi)（PentAGI 主仓库）
-
-> **关于上游链接与代码的说明**：以上链接均指向原作者主页或官方仓库（不引用任何第三方镜像仓库）。研究时参考的上游版本为 `ARTEX 0.3.15`、`Cairn 0.2.1` 与 `PentAGI v2.2.0`。ARIA-X 未复制上述项目的源代码，所有模块均使用 Python 标准库独立实现；如果上述思想对你有启发，请优先为原作者的项目点 Star 或参与贡献。
-
-### 关于 DeepSeek 辅助开发
-
-本项目的**架构收敛、代码实现、单元测试、离线验证脚本及中英文文档**均在 **DeepSeek Harness（DeepSeek-V4.1-Flash-1017）** 的辅助下完成：
-- 将三套异构技术栈（Go / Python / Go+TS）的核心概念抽象为统一的 Python 状态机与 SQLite 数据模型；
-- 实现并重构编排引擎、工具注册表、LLM 路由、HTTP API 与本地 Web 控制台；
-- 编写 217 项单元测试、离线端到端演示（`./aria-x demo`）与自检脚本。
-
-架构取舍、安全边界与最终代码均由项目维护者审阅把关。
-
----
-
 ## ARIA-X 是什么
 
-ARIA-X 是一个**可审计、可离线运行、零第三方依赖**的自主推理与调查编排引擎，专为**本地与隔离环境中的安全研究和原理验证**设计。
+**ARIA-X 将自主推理、受控工具执行与证据管理整合为一套可复盘的安全研究工作流。** 面向本地及隔离实验环境，基于 Python 标准库构建，支持离线运行，并把每一步探索记录为可追溯的状态与证据。
 
-它将一次本地安全验证建模为受约束的**有向状态空间搜索**：
+每次验证任务都沿着可审计的**有向状态空间搜索路径**推进：
 - **起点**：配置白名单（`Scope`）内的本地测试资产；
 - **终点**：具备可复现证据链的调查发现（`Finding`）；
 - **路径**：由 `Planner` 提出假设与意图（`Intent`），由 `Worker` 调用工具收集事实（`Fact`），全程记录在持久化图结构中。
 
-**核心边界说明**：
-> ARIA-X **不是漏洞利用武器库（Exploit Toolkit）**，也不内嵌任何攻击载荷或外部渗透工具链。它不按死板剧本机械扫描，也不允许模型脱离约束自由发挥——每一次推理与工具调用都必须落到黑板上的 `Fact / Intent / Finding` 节点，并严格受限于四维预算、目标白名单（`Scope`）、命令策略与审批门。
+**设计核心：让每次探索都有目标、依据和可检查的结果。**
+
+> Planner 负责生成研究意图，Worker 负责验证并收集证据；`Fact / Intent / Finding` 黑板与持久化图谱记录整个过程。`Scope`、执行预算、命令策略与审批门贯穿工具调用，最终形成可追溯的发现、执行轨迹与报告。
 
 ---
 
@@ -101,7 +75,7 @@ flowchart LR
 
 | 架构层次 | 思想来源 | 吸收的核心机制 | ARIA-X 补齐的工程与安全边界 | 对应源码目录 |
 | :--- | :--- | :--- | :--- | :--- |
-| **状态与搜索层** | **Cairn** | `Fact / Intent / Hint` 黑板；`bootstrap → reason → explore` 闭环；事实驱动而非任务列表驱动 | SQLite WAL 持久化、资产锚点关联（`anchors`）、跨运行持久化（不包含崩溃后原位续跑） | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
+| **状态与搜索层** | **Cairn** | `Fact / Intent / Hint` 黑板；`bootstrap → reason → explore` 闭环；事实驱动而非任务列表驱动 | SQLite WAL 持久化、资产锚点关联（`anchors`）、跨运行状态持久化 | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
 | **编排与图谱层** | **ARTEX** | Planner 唯一意图生成（防止 Worker 偏航）；探索图与资产图分离；跨唤醒 Todo 链；跨 Worker 轨迹检索；图驱动报告 | 统一 15 表 Schema、四维预算硬上限（时间 / Token / LLM / 工具调用） | `src/aria_x/engine/`<br/>`src/aria_x/report/` |
 | **执行与模型层** | **PentAGI** | `researcher / coder / adviser / memorist` 窄问题委托；多模型路由；沙箱终端；分层记忆 | 零依赖 Provider 实现、零依赖 CJK TF-IDF 检索、强制 Scope 与命令策略拦截 | `src/aria_x/agents/`<br/>`src/aria_x/tools/`<br/>`src/aria_x/llm/` |
 | **粘合与验证层** | **ARIA-X 原创** | 单一 `ToolRegistry` 拦截点、无 API Key 确定性离线靶场演示（`./aria-x demo`）、零 CDN 本地 SSE 控制台 | 默认仅绑定 `127.0.0.1`、自动脱敏（`redact_secrets`）、全链路 JSONL 与 SQLite 审计 | `src/aria_x/server/`<br/>`src/aria_x/web/` |
@@ -110,19 +84,19 @@ flowchart LR
 
 ---
 
-## 为什么选择状态空间约束
+## 以证据驱动的状态空间推理
 
-传统脚本按固定规则执行，行为可预期但无法根据上下文动态推理；纯自由度 LLM Agent 则容易产出一堆看似合理、实则缺乏证据且无法复盘的结论。ARIA-X 将自主推理约束在**可验证的状态空间**内：
+ARIA-X 将上下文感知的智能体推理与结构化状态管理、工具执行策略和审计机制结合起来：从目标出发提出意图，通过受控工具验证假设，沉淀事实，再由持久化证据生成报告。**自主性推动探索，结构化证据支撑结论。**
 
 | 机制设计 | 解决的核心问题 |
 | :--- | :--- |
-| **Planner 为唯一意图生成器** | Worker 不能各自发散方向，整条推理与验证路径可完整复盘 |
+| **Planner 统一生成意图** | 将研究方向组织为可追踪的 Intent，使 Worker 围绕明确目标开展验证 |
 | **双图分离（探索图 / 资产图）** | 将“模型的推理假设”与“目标环境中已确认的客观资产”严格隔离 |
 | **Fact / Intent / Hint 黑板** | 每一步决策均有明确的输入依据、证据哈希与来源追溯 |
-| **跨唤醒 Todo 链与过程轨迹** | 多步验证任务不会因上下文窗口截断而遗忘分支，后续 Worker 可检索前序尝试避免重复踩坑 |
+| **跨唤醒 Todo 链与过程轨迹** | 保存任务依赖与探索历史，为多步验证和后续 Worker 提供可检索的上下文 |
 | **四维预算护栏** | 时间、LLM 调用次数、Token 消耗、工具调用次数任一达到阈值即平稳收尾并生成报告 |
 | **Scope + 命令策略 + 审批门** | 目标越界、高风险动作与破坏性指令均在 `ToolRegistry` 入口处被统一拦截 |
-| **图驱动报告** | 报告仅从已落库的节点与证据渲染，杜绝模型在总结阶段凭空编造发现 |
+| **图驱动报告** | 从持久化节点与证据渲染报告，使发现能够回溯至具体的验证路径 |
 
 ---
 
@@ -232,7 +206,7 @@ model = "deepseek-chat"
 通过环境变量配置 API Key 并执行环境自检：
 
 ```bash
-export ARIA_X_API_KEY="sk-..."
+export ARIA_X_API_KEY="your-api-key"
 ./aria-x doctor --llm               # 校验配置、目录、沙箱及模型连通性
 ```
 
@@ -381,21 +355,21 @@ projects ── runs ── tasks
 
 ---
 
-## 安全护栏与已知边界
+## 执行控制与适用范围
 
-> 本节说明代码层面的技术防护机制，不替代使用合规要求。允许与禁止的使用场景以文末[《许可证与使用边界声明》](#许可证与使用边界声明)为准。
+ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执行路径。具体使用范围与合规要求请参阅文末[《许可证与使用边界声明》](#许可证与使用边界声明)。
 
-### 1. 代码级技术护栏
+### 1. 内置执行控制
 - **强制启动授权门**：配置文件必须同时满足 `scope.authorized = true` 且 `scope.targets` 非空，否则直接抛出 `ConfigError` 终止启动。
 - **目标级 Scope 校验**：支持精确主机、通配域名、CIDR、`host:port` 与 URL 前缀；`deny` 规则优先于 `allow`；HTTP 重定向逐跳重新鉴权；无法解析的主机名默认拒绝。
 - **高风险工具审批门**：支持 `auto`（受 Scope 与命令策略约束下放行）、`ask`（创建审批事件并阻塞等待人工确认，最长 300 秒）与 `deny`（直接拒绝并写入审计日志）。
 
-### 2. 诚实限制清单（Known Limitations）
-- **模型能力决定推理上限**：ARIA-X 负责约束探索流程、安全边界与证据链完整性，不保证底层 LLM 一定能识别特定复杂逻辑缺陷。
-- **命令策略为启发式过滤**：`CommandPolicy` 用于拦截常见破坏性指令模式，并非完整操作系统沙箱；强隔离应启用 Docker 后端（默认 `--network none`）。
-- **单机轻量级定位**：基于 SQLite 单写者（WAL）模型，适用于单机实验与教学研究，不包含分布式集群调度。
-- **无内置漏洞利用库**：不包含任何现成 Exploit 载荷，也未内置上游项目的外部容器栈或渗透套件。
-- **不防御恶意模型服务或物理逃逸**：工具输出虽作为数据处理，但未内置专用 Prompt Injection 分类器。
+### 2. 当前版本的设计定位
+- **模型推理与证据相结合**：模型负责提出探索方向，工具输出与记录的证据支撑发现；复杂结论仍需研究者核验。
+- **分层执行控制**：`CommandPolicy` 提供启发式命令过滤；进程级隔离可使用 Docker 后端（默认 `--network none`）。命令过滤本身不等于操作系统沙箱。
+- **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.1.1 的实现范围。
+- **面向验证的工具集**：内置工具聚焦受控验证、状态管理与报告，不打包独立漏洞利用载荷或第三方扫描器。
+- **明确的演进方向**：专用 Prompt Injection 分类器和中断运行的原位恢复尚未实现，相关计划见 [开发路线图](docs/ROADMAP.md)。
 
 完整的威胁模型与安全披露流程见 [docs/SECURITY.md](docs/SECURITY.md)，演进路线图见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
@@ -403,7 +377,7 @@ projects ── runs ── tasks
 
 ## 控制台预览与报告产物
 
-本地 Web 控制台采用零前端框架、零外部 CDN 设计，默认仅监听 `127.0.0.1`。以下截图均来自离线端到端演示（`./aria-x demo`）：
+本地 Web 控制台以原生 HTML/CSS/JS 构建，默认监听 `127.0.0.1`，通过 SSE 展示实时运行状态。以下截图来自离线端到端演示（`./aria-x demo`）：
 
 <p align="center">
   <img src="assets/console-overview.png" alt="ARIA-X 控制台总览：运行状态、预算、任务与审批队列" width="100%">
@@ -483,7 +457,34 @@ ARIA-X/
 | [docs/TOOLS.md](docs/TOOLS.md) | 27 个内置工具的参数定义、风险分级与 Scope 校验行为 |
 | [docs/SECURITY.md](docs/SECURITY.md) | 技术防护机制、威胁模型、敏感信息脱敏与安全漏洞披露流程 |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 本地与容器化部署、模型接入、沙箱配置与常见排障 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | 已实现能力、后续计划与明确不做的功能边界 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | 当前实现、开发计划与版本范围 |
+
+---
+
+## 致谢与思想来源
+
+ARIA-X 将 **ARTEX、Cairn 与 PentAGI** 的架构思想整合到独立的 Python 运行时，并构建统一的持久化状态层、执行控制与审计体系。感谢这些开源项目及原作者对相关技术生态的贡献：
+
+| 上游项目 | 原作者 / 团队 | ARIA-X 借鉴的核心思想 | 许可证 |
+| :--- | :--- | :--- | :--- |
+| **ARTEX** | [Autumn-27](https://github.com/Autumn-27)（原仓库 `Autumn-27/ARTEX` 已于 2026-10 由作者移除） | 探索图与共享资产图分离的双图架构；Planner 作为唯一意图生成器；跨唤醒周期的 Todo 链；跨 Worker 过程轨迹；高风险工具审批门；图驱动报告 | **AGPL-3.0** |
+| **Cairn** | [起零衍迹 / oritera](https://github.com/oritera) | `Fact / Intent / Hint` 黑板模型；`bootstrap → reason → explore` 状态空间搜索；无固定角色的 OODA Worker；以“事实”而非“任务清单”为中心 | **AGPL-3.0** |
+| **PentAGI** | [VXControl](https://github.com/vxcontrol) | `researcher / coder / adviser / memorist` 专家分工；多模型 Provider 抽象；沙箱化终端；分层记忆；将复杂子问题委托给窄能力子代理 | **MIT** |
+
+原作者的相关仓库（一并致谢）：
+- [Norma](https://github.com/Autumn-27/Norma)（ARTEX 使用的 Agent SDK）· [ScopeSentry](https://github.com/Autumn-27/ScopeSentry)（资产与范围测绘系统）
+- [oritera/Cairn](https://github.com/oritera/Cairn)（Cairn 主仓库）· [vxcontrol/pentagi](https://github.com/vxcontrol/pentagi)（PentAGI 主仓库）
+
+> **来源与实现**：相关链接指向原作者主页或官方仓库。参考版本为 `ARTEX 0.3.15`、`Cairn 0.2.1` 与 `PentAGI v2.2.0`；ARIA-X 以 Python 标准库独立实现这些架构思想。欢迎同时关注和支持原作者的项目。
+
+### 关于 DeepSeek 辅助开发
+
+本项目的**架构收敛、代码实现、单元测试、离线验证脚本及中英文文档**均在 **DeepSeek Harness（DeepSeek-V4.1-Flash-1017）** 的辅助下完成：
+- 将三套异构技术栈（Go / Python / Go+TS）的核心概念抽象为统一的 Python 状态机与 SQLite 数据模型；
+- 实现并重构编排引擎、工具注册表、LLM 路由、HTTP API 与本地 Web 控制台；
+- 编写 217 项单元测试、离线端到端演示（`./aria-x demo`）与自检脚本。
+
+架构取舍、安全边界与最终代码均由项目维护者审阅把关。
 
 ---
 

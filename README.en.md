@@ -10,7 +10,7 @@
 
 <p align="center">
   <strong>Autonomous Reasoning &amp; Investigation Agent, eXtended</strong><br>
-  A local-first state-space reasoning and verification orchestration engine for security research
+  Evidence-driven security research, from autonomous planning to auditable findings and reports
 </p>
 
 <p align="center">
@@ -31,44 +31,18 @@
 
 ---
 
-## Acknowledgements & Lineage
-
-ARIA-X did not invent its core architecture in isolation. It extracts and recombines the **architectural concepts and engineering discipline** of three open-source projects, adding a unified persistent state layer and strict operational guardrails. Grateful acknowledgement goes to the original authors and teams:
-
-| Upstream Project | Original Author / Team | Core Concepts Adopted by ARIA-X | License |
-| :--- | :--- | :--- | :--- |
-| **ARTEX** | [Autumn-27](https://github.com/Autumn-27) (original repo `Autumn-27/ARTEX` removed by author in Oct 2026) | Dual-graph separation (exploration graph + shared asset graph); Planner as the sole intent generator; cross-wakeup Todo chain; cross-worker process traces; approval gate; graph-driven reports | **AGPL-3.0** |
-| **Cairn** | [起零衍迹 / oritera](https://github.com/oritera) | `Fact / Intent / Hint` blackboard; `bootstrap → reason → explore` state-space search; role-less OODA workers; centering state on verified facts rather than static task queues | **AGPL-3.0** |
-| **PentAGI** | [VXControl](https://github.com/vxcontrol) | `researcher / coder / adviser / memorist` specialist delegation; LLM provider abstraction; sandboxed terminal execution; layered memory | **MIT** |
-
-Related repositories by the upstream authors:
-- [Norma](https://github.com/Autumn-27/Norma) (agent SDK used by ARTEX) · [ScopeSentry](https://github.com/Autumn-27/ScopeSentry) (asset and scope mapping system)
-- [oritera/Cairn](https://github.com/oritera/Cairn) (Cairn repository) · [vxcontrol/pentagi](https://github.com/vxcontrol/pentagi) (PentAGI repository)
-
-> **Note on upstream links and code**: All links above point exclusively to the original authors or official repositories (never third-party mirrors). Upstream versions studied were `ARTEX 0.3.15`, `Cairn 0.2.1`, and `PentAGI v2.2.0`. ARIA-X copies no source code from these projects—every module is an independent Python standard-library implementation. If these concepts are useful to your work, please star and support the original authors' repositories first.
-
-### Development Assistance from DeepSeek
-
-The **architectural consolidation, code implementation, unit test suite, offline verification pipeline, and bilingual documentation** of ARIA-X were developed with assistance from **DeepSeek Harness (DeepSeek-V4.1-Flash-1017)**:
-- Distilling three heterogeneous stacks (Go / Python / Go+TS) into a single Python state machine and unified SQLite schema;
-- Implementing and refactoring the orchestration engine, tool registry, LLM router, HTTP API, and local web console;
-- Authoring the 217 unit tests, deterministic offline demo (`./aria-x demo`), and verification scripts.
-
-All architectural trade-offs, safety boundaries, and final code were reviewed and validated by the maintainer.
-
----
-
 ## What ARIA-X Is
 
-ARIA-X is an **auditable, offline-capable, zero-dependency** autonomous reasoning and investigation orchestration engine built for **security research and principle-level verification in local, isolated environments**.
+**ARIA-X brings autonomous reasoning, controlled tool execution, and evidence management together in a traceable security-research workflow.** Built for local and isolated labs, it runs on the Python standard library and persists each investigation step as structured state and inspectable evidence.
 
-It models a local security verification run as a constrained **directed state-space search**:
+Each verification engagement follows an auditable **directed state-space search**:
 - **Origin**: local test assets explicitly permitted by the configured `Scope`;
 - **Goal**: reproducible findings backed by verifiable evidence;
 - **Path**: hypotheses (`Intent`) proposed by the `Planner` and investigated by `Worker` agents via controlled tools, recorded step by step in a persistent graph.
 
-**Key Operational Boundary**:
-> ARIA-X is **not an exploit toolkit or automated attack weapon**. It ships with zero exploit payloads and strips out all offensive runtime stacks from its upstream inspirations. Rather than running a fixed scanner script or letting an LLM improvise unchecked, ARIA-X requires every step to land on the blackboard as an auditable `Fact`, `Intent`, or `Finding`, governed by four-dimensional budgets, target `Scope` allowlists, command policies, and approval gates.
+**Core principle: every investigation step has a purpose, a boundary, and an evidence trail.**
+
+> The Planner defines investigation intent while Workers perform scoped validation and evidence collection. The `Fact / Intent / Finding` blackboard and persistent graph capture the process; execution budgets, `Scope` allowlists, command policies, and approval gates govern tool use. The result is an inspectable chain of findings, traces, and reports.
 
 ---
 
@@ -101,7 +75,7 @@ flowchart LR
 
 | Layer | Inspiration | Adopted Mechanism | Added by ARIA-X | Package Path |
 | :--- | :--- | :--- | :--- | :--- |
-| **State & Search** | **Cairn** | `Fact / Intent / Hint` blackboard; `bootstrap → reason → explore` OODA loop; fact-centric state | SQLite WAL persistence, asset anchors (`anchors`), persisted state across runs (not crash-resume) | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
+| **State & Search** | **Cairn** | `Fact / Intent / Hint` blackboard; `bootstrap → reason → explore` OODA loop; fact-centric state | SQLite WAL persistence, asset anchors (`anchors`), durable state across runs | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
 | **Orchestration & Graph** | **ARTEX** | Planner as sole intent generator; exploration vs. asset graph separation; cross-wakeup Todo chain; cross-worker trace search; graph-driven reports | Unified 15-table schema, four-dimensional budget ceilings (time / tokens / LLM calls / tool calls) | `src/aria_x/engine/`<br/>`src/aria_x/report/` |
 | **Execution & Models** | **PentAGI** | Narrow delegation (`researcher / coder / adviser / memorist`); multi-provider routing; sandboxed terminal; layered memory | Zero-dependency LLM clients, CJK-aware TF-IDF retrieval, mandatory Scope and command-policy gates | `src/aria_x/agents/`<br/>`src/aria_x/tools/`<br/>`src/aria_x/llm/` |
 | **Glue & Verification** | **ARIA-X Native** | Single `ToolRegistry` enforcement point, deterministic offline demo (`./aria-x demo`) requiring no API key, zero-CDN local SSE console | Loopback-only binding (`127.0.0.1`), automatic secret redaction, end-to-end JSONL and SQLite auditing | `src/aria_x/server/`<br/>`src/aria_x/web/` |
@@ -110,19 +84,19 @@ For an item-by-item comparison with upstream systems, see [docs/FUSION.md](docs/
 
 ---
 
-## Why Constrained State-Space Reasoning
+## Evidence-Driven State-Space Reasoning
 
-Rule-based scanners follow static playbooks: their coverage is predictable, but they cannot reason across multi-step dependencies. Unconstrained LLM agents, on the other hand, often produce plausible-sounding summaries without verifiable evidence. ARIA-X bounds agent autonomy inside a **verifiable state space**:
+ARIA-X combines context-aware agent reasoning with explicit state, execution policies, and auditability. It forms investigation intents, tests hypotheses through controlled tools, captures facts, and builds reports from persisted evidence. **Autonomy drives exploration; structured evidence explains the results.**
 
 | Design Mechanism | Problem Solved |
 | :--- | :--- |
-| **Planner as sole intent generator** | Workers cannot invent ad-hoc directions; the entire reasoning path is replayable |
+| **Planner as the intent authority** | Centralizes investigation direction in traceable Intents and gives Workers clear validation objectives |
 | **Dual graphs (exploration vs. assets)** | Separates unverified hypotheses ("what we think") from confirmed environment state ("what exists") |
 | **Fact / Intent / Hint blackboard** | Every decision records its inputs, evidence hashes, and provenance |
-| **Cross-wakeup Todo chain & traces** | Multi-step verifications survive context-window limits; workers search prior traces to avoid repeating failed attempts |
+| **Cross-wakeup Todo chain & traces** | Preserves task dependencies and investigation history as searchable context for subsequent Workers |
 | **Four-dimensional budgets** | Reaching any ceiling (wall time, LLM calls, tokens, or tool calls) triggers a clean wrap-up and report |
 | **Scope + command policy + approval** | Out-of-scope targets, risky tools, and destructive commands are intercepted at `ToolRegistry.execute` |
-| **Graph-driven reports** | Reports render strictly from persisted database nodes and evidence—never from unverified chat text |
+| **Graph-driven reports** | Builds reports from persisted state and evidence, linking findings to their verification paths |
 
 ---
 
@@ -232,7 +206,7 @@ model = "deepseek-chat"
 Supply your API key via the environment and run the self-check:
 
 ```bash
-export ARIA_X_API_KEY="sk-..."
+export ARIA_X_API_KEY="your-api-key"
 ./aria-x doctor --llm               # verifies config, directories, sandbox, and live model call
 ```
 
@@ -381,21 +355,21 @@ In ARIA-X, a `Finding` simultaneously represents a verified fact (Cairn), a conc
 
 ---
 
-## Technical Safeguards & Known Limitations
+## Execution Controls & Operating Scope
 
-> This section describes technical controls implemented in code; it does not grant authorization to test any system. Permitted and prohibited uses are governed by [License & Usage Boundaries](#license--usage-boundaries) below.
+ARIA-X integrates target scoping, risk-based approvals, and execution auditing into its runtime. For permitted uses and compliance requirements, see [License & Usage Boundaries](#license--usage-boundaries).
 
-### 1. Code-Level Safeguards
+### 1. Built-In Execution Controls
 - **Mandatory Authorization Gate**: Both `scope.authorized = true` and a non-empty `scope.targets` list are required before a run can be created; omitting either raises `ConfigError`.
 - **Target-Level Scope Enforcement**: Supports exact hosts, wildcard domains, CIDRs, `host:port`, and URL prefixes. `deny` rules take precedence over `allow`; HTTP redirects are re-verified hop by hop; unresolved hostnames are rejected by default.
 - **High-Risk Tool Approval Gate**: Supports `auto` (executes within Scope, path jail, and command policy), `ask` (creates an approval record and blocks for human confirmation up to 300 s), and `deny` (refuses immediately and logs an audit entry).
 
-### 2. Known Limitations
-- **Model quality sets the reasoning ceiling**: ARIA-X enforces process discipline, boundaries, and evidence tracking, but cannot guarantee that an underlying LLM will identify a specific complex flaw.
-- **Command policy is heuristic**: `CommandPolicy` filters common destructive command patterns; it is not an OS-level sandbox. Use the Docker backend (`--network none` by default) for process isolation.
-- **Single-machine scale**: SQLite's single-writer WAL model is designed for local research and single-team use, not distributed cluster scheduling.
-- **No built-in exploit library**: ARIA-X ships no exploit payloads and bundles none of the external offensive container stacks from upstream projects.
-- **Does not defend against malicious model endpoints or host escape**: Tool outputs are framed as data, but no dedicated prompt-injection classifier is bundled.
+### 2. Current Design Scope
+- **Model reasoning backed by evidence**: LLMs guide exploration, while inspectable tool outputs and recorded evidence support findings. Researchers should verify complex conclusions.
+- **Layered execution controls**: `CommandPolicy` applies heuristic command filtering. For process isolation, use the Docker backend (`--network none` by default); command filtering alone is not an OS-level sandbox.
+- **Focused on local research**: SQLite WAL persistence supports local experiments and small-team workflows. Distributed scheduling is outside the v0.1.1 feature set.
+- **Purpose-built orchestration**: The built-in toolkit focuses on scoped validation, state management, and reporting rather than bundling exploit payloads or third-party scanners.
+- **Clear development roadmap**: Dedicated prompt-injection classification and crash-resume of in-progress engagements are not implemented in v0.1.1; see [Roadmap](docs/ROADMAP.md).
 
 See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model and vulnerability disclosure policy, and [docs/ROADMAP.md](docs/ROADMAP.md) for planned work.
 
@@ -403,7 +377,7 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model and vulnerabi
 
 ## Console Previews & Report Artifacts
 
-The local web console is a zero-framework, zero-CDN single-page application bound to `127.0.0.1` by default. The screenshots below are captured from the offline demo (`./aria-x demo`):
+The local web console uses native HTML/CSS/JS, binds to `127.0.0.1` by default, and streams live run activity through SSE. The screenshots below are from the offline demo (`./aria-x demo`):
 
 <p align="center">
   <img src="assets/console-overview.png" alt="ARIA-X console overview: run state, budget, tasks, and approval queue" width="100%">
@@ -483,7 +457,34 @@ ARIA-X/
 | [docs/TOOLS.md](docs/TOOLS.md) | Parameter schemas, risk levels, and Scope behavior for all 27 built-in tools |
 | [docs/SECURITY.md](docs/SECURITY.md) | Technical safeguards, threat model, secret redaction, and disclosure policy |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Local and container deployment, model configuration, sandboxing, and troubleshooting |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Implemented features, upcoming milestones, and explicit non-goals |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Current capabilities, development priorities, and version scope |
+
+---
+
+## Acknowledgements & Lineage
+
+ARIA-X brings ideas from **ARTEX, Cairn, and PentAGI** into one independently implemented Python runtime, with unified persistent state, execution controls, and integrated auditing. We acknowledge the original authors and teams whose work helped shape this approach:
+
+| Upstream Project | Original Author / Team | Core Concepts Adopted by ARIA-X | License |
+| :--- | :--- | :--- | :--- |
+| **ARTEX** | [Autumn-27](https://github.com/Autumn-27) (original repo `Autumn-27/ARTEX` removed by author in Oct 2026) | Dual-graph separation (exploration graph + shared asset graph); Planner as the sole intent generator; cross-wakeup Todo chain; cross-worker process traces; approval gate; graph-driven reports | **AGPL-3.0** |
+| **Cairn** | [起零衍迹 / oritera](https://github.com/oritera) | `Fact / Intent / Hint` blackboard; `bootstrap → reason → explore` state-space search; role-less OODA workers; centering state on verified facts rather than static task queues | **AGPL-3.0** |
+| **PentAGI** | [VXControl](https://github.com/vxcontrol) | `researcher / coder / adviser / memorist` specialist delegation; LLM provider abstraction; sandboxed terminal execution; layered memory | **MIT** |
+
+Related repositories by the upstream authors:
+- [Norma](https://github.com/Autumn-27/Norma) (agent SDK used by ARTEX) · [ScopeSentry](https://github.com/Autumn-27/ScopeSentry) (asset and scope mapping system)
+- [oritera/Cairn](https://github.com/oritera/Cairn) (Cairn repository) · [vxcontrol/pentagi](https://github.com/vxcontrol/pentagi) (PentAGI repository)
+
+> **Sources and implementation**: These links lead to original authors or official repositories. The versions studied were `ARTEX 0.3.15`, `Cairn 0.2.1`, and `PentAGI v2.2.0`. ARIA-X independently implements the resulting architecture using Python's standard library. Readers are encouraged to explore and support the original projects.
+
+### Development Assistance from DeepSeek
+
+The **architectural consolidation, code implementation, unit test suite, offline verification pipeline, and bilingual documentation** of ARIA-X were developed with assistance from **DeepSeek Harness (DeepSeek-V4.1-Flash-1017)**:
+- Distilling three heterogeneous stacks (Go / Python / Go+TS) into a single Python state machine and unified SQLite schema;
+- Implementing and refactoring the orchestration engine, tool registry, LLM router, HTTP API, and local web console;
+- Authoring the 217 unit tests, deterministic offline demo (`./aria-x demo`), and verification scripts.
+
+All architectural trade-offs, safety boundaries, and final code were reviewed and validated by the maintainer.
 
 ---
 

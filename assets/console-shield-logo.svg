@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44" role="img" aria-labelledby="title desc">
+  <title id="title">ARIA-X console shield logo</title>
+  <desc id="desc">Green-to-cyan shield with a central node, crosshair, and dotted orbit, matching the ARIA-X web console.</desc>
+  <rect width="44" height="44" rx="9" fill="#0b1220"/>
+        <defs>
+          <linearGradient id="aria-x-mark" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#4ade80"/>
+            <stop offset="100%" stop-color="#22d3ee"/>
+          </linearGradient>
+        </defs>
+        <path d="M22 2 40 9v13c0 10-7.6 17.4-18 20C11.6 39.4 4 32 4 22V9Z"
+              fill="none" stroke="url(#aria-x-mark)" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M22 11v22M13 22h18" stroke="url(#aria-x-mark)" stroke-width="1.4" opacity=".55"/>
+        <circle cx="22" cy="22" r="4.2" fill="url(#aria-x-mark)"/>
+        <circle cx="22" cy="22" r="12" fill="none" stroke="url(#aria-x-mark)" stroke-width=".8"
+                stroke-dasharray="2 4" opacity=".6"/>
+      </svg>

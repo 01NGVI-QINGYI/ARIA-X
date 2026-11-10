@@ -1,9 +1,9 @@
 <p align="right">
-  <a href="README.md">简体中文</a> · <strong>English</strong>
+  <a href="README.md">简体中文</a> · <strong>English</strong> · <a href="README.ja.md">日本語</a>
 </p>
 
 <p align="center">
-  <img src="assets/logo.svg" width="110" alt="ARIA-X logo">
+  <img src="assets/logo.svg" width="110" alt="ARIA-X unified console shield logo">
 </p>
 
 <h1 align="center">ARIA-X</h1>
@@ -101,7 +101,7 @@ flowchart LR
 
 | Layer | Inspiration | Adopted Mechanism | Added by ARIA-X | Package Path |
 | :--- | :--- | :--- | :--- | :--- |
-| **State & Search** | **Cairn** | `Fact / Intent / Hint` blackboard; `bootstrap → reason → explore` OODA loop; fact-centric state | SQLite WAL persistence, asset anchors (`anchors`), cross-run state recovery | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
+| **State & Search** | **Cairn** | `Fact / Intent / Hint` blackboard; `bootstrap → reason → explore` OODA loop; fact-centric state | SQLite WAL persistence, asset anchors (`anchors`), persisted state across runs (not crash-resume) | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
 | **Orchestration & Graph** | **ARTEX** | Planner as sole intent generator; exploration vs. asset graph separation; cross-wakeup Todo chain; cross-worker trace search; graph-driven reports | Unified 15-table schema, four-dimensional budget ceilings (time / tokens / LLM calls / tool calls) | `src/aria_x/engine/`<br/>`src/aria_x/report/` |
 | **Execution & Models** | **PentAGI** | Narrow delegation (`researcher / coder / adviser / memorist`); multi-provider routing; sandboxed terminal; layered memory | Zero-dependency LLM clients, CJK-aware TF-IDF retrieval, mandatory Scope and command-policy gates | `src/aria_x/agents/`<br/>`src/aria_x/tools/`<br/>`src/aria_x/llm/` |
 | **Glue & Verification** | **ARIA-X Native** | Single `ToolRegistry` enforcement point, deterministic offline demo (`./aria-x demo`) requiring no API key, zero-CDN local SSE console | Loopback-only binding (`127.0.0.1`), automatic secret redaction, end-to-end JSONL and SQLite auditing | `src/aria_x/server/`<br/>`src/aria_x/web/` |
@@ -136,6 +136,7 @@ Rule-based scanners follow static playbooks: their coverage is predictable, but 
 - **Configurable Approval Gate**: With `safety.approval = "ask"`, `high` and `critical` tools record an approval request and block for human confirmation; `deny` rejects them outright; `auto` executes them within Scope and command-policy boundaries.
 - **Evidence-Backed Reports**: Each run writes `report.md`, `report.html`, and `findings.json` under `runs/<run_id>/`, backed by SQLite state, a JSONL event stream, and an audit table.
 - **Zero-CDN Local Web Console**: Built-in SPA served on `127.0.0.1:8787` by default, streaming live updates over Server-Sent Events (SSE) with optional Bearer token authentication.
+- **Interactive PTY Sessions (v0.1.1)**: `session_open`, `session_send`, `session_read`, `session_close`, and `session_list` support programs requiring persistent terminal interaction inside isolated local labs. Starting a session and sending input are high-risk actions subject to command policy, Scope checks, and approval gates. Sessions are capped at four concurrent instances per run, with idle cleanup; see the [changelog](CHANGELOG.md).
 
 ---
 
@@ -180,6 +181,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full module, schema, and HT
 Only **CPython 3.11+** (3.12 recommended) is required. No `pip install` step is needed.
 
 ```bash
+git clone https://github.com/01NGVI-QINGYI/ARIA-X.git
 cd ARIA-X
 
 # Option 1: use the bundled launcher (locates Python and sets PYTHONPATH automatically)
@@ -271,7 +273,7 @@ Binds to `http://127.0.0.1:8787` by default, providing interactive views for pro
 | `aria-x run --goal ...` | Run a headless verification session with the configured scope and goal |
 | `aria-x serve` | Start the local web console (`127.0.0.1:8787` by default) |
 | `aria-x doctor [--llm]` | Verify Python, config, directories, tools, engine, server, sandbox, and LLM connectivity |
-| `aria-x tools [--json]` | List all 22 built-in tools with their risk levels and Scope requirements |
+| `aria-x tools [--json]` | List all 27 built-in tools with their risk levels and Scope requirements |
 | `aria-x projects / graph / report / export` | Inspect persisted projects, graph summaries, reports, or full JSON exports |
 
 - **Global flags**: `-c/--config <path>` (before or after the subcommand), `--version`.
@@ -341,7 +343,7 @@ Supported environment variable overrides: `ARIA_X_PROVIDER`, `ARIA_X_BASE_URL`, 
 
 ---
 
-## Built-in Tool Catalog (22 Tools)
+## Built-in Tool Catalog (27 Tools)
 
 | Category | Tools | Risk & Safeguards |
 | :--- | :--- | :--- |
@@ -427,13 +429,13 @@ Every run writes three self-contained artifacts to `runs/<run_id>/`:
 ### Docker
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.1.0 .
+docker build -f docker/Dockerfile -t aria-x:0.1.1 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.1.0
+  aria-x:0.1.1
 ```
 
 The container image packages only ARIA-X's Python standard-library core without third-party scanners. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for details.
@@ -462,7 +464,7 @@ ARIA-X/
 │   ├── store/                 # 15-table SQLite schema and DAO
 │   ├── engine/                # budgets, scheduler, context builder, orchestrator loop
 │   ├── agents/                # agent loop, role boundaries, prompt contracts, workers
-│   ├── tools/                 # 22 built-in tools, Scope gate, sandbox, approval gate
+│   ├── tools/                 # 27 built-in tools, Scope gate, sandbox, approval gate
 │   ├── llm/                   # providers, router, mock/scenario doubles, JSON repair
 │   ├── memory/                # zero-dependency TF-IDF retrieval (CJK-aware)
 │   ├── report/                # Markdown / HTML / findings.json renderers
@@ -478,7 +480,7 @@ ARIA-X/
 | :--- | :--- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Module responsibilities, data flow, SQLite schema, HTTP API, and event types |
 | [docs/FUSION.md](docs/FUSION.md) | Item-by-item architectural mapping and trade-offs vs. ARTEX, Cairn, and PentAGI |
-| [docs/TOOLS.md](docs/TOOLS.md) | Parameter schemas, risk levels, and Scope behavior for all 22 built-in tools |
+| [docs/TOOLS.md](docs/TOOLS.md) | Parameter schemas, risk levels, and Scope behavior for all 27 built-in tools |
 | [docs/SECURITY.md](docs/SECURITY.md) | Technical safeguards, threat model, secret redaction, and disclosure policy |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Local and container deployment, model configuration, sandboxing, and troubleshooting |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Implemented features, upcoming milestones, and explicit non-goals |

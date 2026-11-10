@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/logo.svg" width="110" alt="ARIA-X unified console shield logo">
+  <img src="assets/console-shield-logo.svg" width="110" alt="ARIA-X unified console shield logo">
 </p>
 
 <h1 align="center">ARIA-X</h1>

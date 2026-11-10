@@ -1,9 +1,9 @@
 <p align="right">
-  <strong>简体中文</strong> · <a href="README.en.md">English</a>
+  <strong>简体中文</strong> · <a href="README.en.md">English</a> · <a href="README.ja.md">日本語</a>
 </p>
 
 <p align="center">
-  <img src="assets/logo.svg" width="110" alt="ARIA-X logo">
+  <img src="assets/logo.svg" width="110" alt="ARIA-X 控制台统一盾牌标志">
 </p>
 
 <h1 align="center">ARIA-X</h1>
@@ -101,7 +101,7 @@ flowchart LR
 
 | 架构层次 | 思想来源 | 吸收的核心机制 | ARIA-X 补齐的工程与安全边界 | 对应源码目录 |
 | :--- | :--- | :--- | :--- | :--- |
-| **状态与搜索层** | **Cairn** | `Fact / Intent / Hint` 黑板；`bootstrap → reason → explore` 闭环；事实驱动而非任务列表驱动 | SQLite WAL 持久化、资产锚点关联（`anchors`）、跨运行状态恢复 | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
+| **状态与搜索层** | **Cairn** | `Fact / Intent / Hint` 黑板；`bootstrap → reason → explore` 闭环；事实驱动而非任务列表驱动 | SQLite WAL 持久化、资产锚点关联（`anchors`）、跨运行持久化（不包含崩溃后原位续跑） | `src/aria_x/store/`<br/>`src/aria_x/engine/` |
 | **编排与图谱层** | **ARTEX** | Planner 唯一意图生成（防止 Worker 偏航）；探索图与资产图分离；跨唤醒 Todo 链；跨 Worker 轨迹检索；图驱动报告 | 统一 15 表 Schema、四维预算硬上限（时间 / Token / LLM / 工具调用） | `src/aria_x/engine/`<br/>`src/aria_x/report/` |
 | **执行与模型层** | **PentAGI** | `researcher / coder / adviser / memorist` 窄问题委托；多模型路由；沙箱终端；分层记忆 | 零依赖 Provider 实现、零依赖 CJK TF-IDF 检索、强制 Scope 与命令策略拦截 | `src/aria_x/agents/`<br/>`src/aria_x/tools/`<br/>`src/aria_x/llm/` |
 | **粘合与验证层** | **ARIA-X 原创** | 单一 `ToolRegistry` 拦截点、无 API Key 确定性离线靶场演示（`./aria-x demo`）、零 CDN 本地 SSE 控制台 | 默认仅绑定 `127.0.0.1`、自动脱敏（`redact_secrets`）、全链路 JSONL 与 SQLite 审计 | `src/aria_x/server/`<br/>`src/aria_x/web/` |
@@ -136,6 +136,7 @@ flowchart LR
 - **分级审批门**：当 `safety.approval = "ask"` 时，`high` / `critical` 风险工具会生成审批记录并阻塞等待人工确认；`deny` 直接拒绝；`auto` 放行但依然受 Scope 与命令策略约束。
 - **结构化证据链报告**：每次运行在 `runs/<run_id>/` 下生成 `report.md`、`report.html` 与 `findings.json`，并与 SQLite 状态图、JSONL 事件流及审计表一一对应。
 - **零 CDN 本地控制台**：内置基于原生 HTML/CSS/JS 与 SSE 实时事件流的本地 Web 控制台（默认仅绑定 `127.0.0.1:8787`，支持 Bearer Token 认证）。
+- **交互式 PTY 会话（v0.1.1）**：新增 `session_open`、`session_send`、`session_read`、`session_close`、`session_list`，用于在本机隔离实验环境中驱动需要持续终端交互的程序；创建会话和发送输入均为高风险操作，必须经过命令策略、Scope 校验与审批门。每次运行最多 4 个并发会话，空闲会话会被清理；详情见 [更新日志](CHANGELOG.md)。
 
 ---
 
@@ -180,6 +181,7 @@ report（生成 Markdown + HTML + findings.json）+ JSONL 事件归档 + 审计�
 仅需 **CPython 3.11+**（推荐 3.12），无需安装任何第三方依赖。
 
 ```bash
+git clone https://github.com/01NGVI-QINGYI/ARIA-X.git
 cd ARIA-X
 
 # 方式一：使用仓库自带的免安装启动器（自动定位 Python 并设置 PYTHONPATH）
@@ -427,13 +429,13 @@ projects ── runs ── tasks
 ### Docker 运行
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.1.0 .
+docker build -f docker/Dockerfile -t aria-x:0.1.1 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.1.0
+  aria-x:0.1.1
 ```
 
 容器镜像仅包含 ARIA-X 标准库核心代码，不打包任何第三方扫描器。详细部署说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。

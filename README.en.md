@@ -104,7 +104,7 @@ ARIA-X combines context-aware agent reasoning with explicit state, execution pol
 
 - **Offline End-to-End Verification**: `./aria-x demo` requires no API key and no internet access. It launches a local teaching target on an ephemeral `127.0.0.1` port and runs the full `Planner → Worker → Finding → Report` loop deterministically.
 - **Python Standard Library Only**: Runs on CPython 3.11+ with zero third-party runtime dependencies (`pip install` is completely optional).
-- **Multi-Provider LLM Routing**: Supports OpenAI-compatible APIs (DeepSeek, vLLM, Ollama, OpenRouter), Anthropic, and deterministic `mock` and `scenario` test providers.
+- **Multi-Provider LLM Routing**: Supports OpenAI-compatible APIs (DeepSeek, NotHoly, vLLM, Ollama, OpenRouter), Anthropic, and deterministic `mock` and `scenario` test providers.
 - **Enforced Target Scope**: Network tools call `Scope.require_url/require_host` before sending a single packet. Supports exact hosts, wildcard domains, CIDRs, `host:port`, URL prefixes, `deny` rules, and per-host rate limits. HTTP redirects are re-authorized hop by hop; unresolved hostnames fail closed.
 - **Isolated Terminal Backends**: Supports `local`, `docker`, and `mock` sandboxes; the Docker backend defaults to `--network none`.
 - **Configurable Approval Gate**: With `safety.approval = "ask"`, `high` and `critical` tools record an approval request and block for human confirmation; `deny` rejects them outright; `auto` executes them within Scope and command-policy boundaries.

@@ -250,6 +250,7 @@ def worker_spec(ctx: Any, name: str = "worker") -> AgentSpec:
             "{fact:{title,body,confidence?}, findings:[...], assets:[...], "
             "goal_proven:boolean, summary?}. No prose outside the JSON."
         ),
+        include_mcp=True,
     )
 
 
@@ -282,6 +283,7 @@ def specialist_spec(ctx: Any, name: str = "researcher") -> AgentSpec:
             "Return a compact technical answer (Markdown allowed): findings, exact "
             "commands/URLs, reproduction notes, confidence, and open questions."
         ),
+        include_mcp=(resolved == "researcher"),
     )
 
 

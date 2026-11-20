@@ -173,6 +173,35 @@ reporter = "deepseek-chat"
 - `scenario`：`llm.scenario = "examples/scenario_demo.json"`，按角色队列回放，
   用于文档示例与回归测试。并行时队列会被并发消费，确定性场景请设 `max_concurrency=1`。
 
+### 4.5 MCP 工具（可选）
+
+`[mcp]` 让 ARIA-X 从远程 [MCP](https://modelcontextprotocol.io) 服务器加载工具。
+这些工具在构建工具注册表时拉取，和内置工具一样包装成 `FunctionTool`，交给 worker 与
+`researcher` specialist 使用，并走同一套审批策略（`safety.approval`）。完全通用：
+一个 server 只是一个 URL 加上你信任的请求头，不绑定任何特定服务商。
+
+```toml
+[mcp]
+[[mcp.servers]]
+name = "notholy"                       # 标签，也是工具名前缀（notholy_<tool>）
+url = "https://api.notholy.com/mcp"    # Streamable HTTP endpoint
+headers = { Authorization = "Bearer ${NOTHOLY_API_KEY}" }
+# risk = "high"                        # 可选：强制该 server 所有工具的风险等级
+# requires_scope = false               # 可选：对该 server 的工具强制 Scope
+# enabled = true                       # 可选：false 时跳过该 server
+```
+
+- 传输层是 Streamable HTTP（JSON-RPC 2.0，基于 `urllib`，**无新依赖**）。
+- 风险等级默认由工具的 MCP annotation 推导（`readOnlyHint` → `low`，
+  `destructiveHint`/`openWorldHint` → `high`，其余 `medium`），可用 server 的 `risk`
+  覆盖；高风险工具在 `safety.approval = "ask" | "deny"` 下被审批门拦截。
+- 可选且 fail-open：不配置 `[mcp].servers` 时默认工具集不变；某个 server 不可达或行为
+  异常会被跳过并发出告警，不会中断运行；远程工具永远不会覆盖同名内置工具。
+
+> **Scope 说明**：ARIA-X 看不到远程 server 自己发起的流量，因此远程工具**不受 `[scope]`
+> 约束**。只接入你信任的 server；任何可能触达目标的工具，请把 server 的 `risk` 设为 high，
+> 或设 `requires_scope = true`，并配合 `safety.approval = "ask"`。
+
 ## 5. Web 控制台与 API
 
 ```bash

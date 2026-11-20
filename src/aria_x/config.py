@@ -127,6 +127,22 @@ class ServerConfig:
 
 
 @dataclass(slots=True)
+class MCPConfig:
+    """Optional Model Context Protocol tool servers.
+
+    Each entry points ARIA-X at a remote MCP server whose tools are loaded at
+    registry build time and offered to the research roles, under the same
+    approval gate as the built-ins. Empty by default: no servers, no change.
+    Scope note: ARIA-X cannot see the traffic a remote server originates, so a
+    remote tool is not bounded by ``[scope]``; only add servers you trust and,
+    for anything that may touch a target, set the server ``risk`` high (or run
+    ``safety.approval = "ask"``). See ``tools/mcp.py`` for the field reference.
+    """
+
+    servers: list = field(default_factory=list)   # list of server tables (see tools/mcp.py)
+
+
+@dataclass(slots=True)
 class EngineConfig:
     bootstrap: bool = True
     reason_on_change: bool = True
@@ -154,6 +170,7 @@ class AriaXConfig:
     safety: SafetyConfig = field(default_factory=SafetyConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
     # -- loading ---------------------------------------------------------
 
@@ -177,7 +194,7 @@ class AriaXConfig:
             return cls()
         cfg = cls()
         for key, value in raw.items():
-            if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine"}:
+            if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine", "mcp"}:
                 section = getattr(cfg, key)
                 if not isinstance(value, Mapping):
                     raise ConfigError(f"config section '{key}' must be a table/object")
@@ -190,7 +207,7 @@ class AriaXConfig:
         for key, value in raw.items():
             if value is None:
                 continue
-            if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine"} and isinstance(value, Mapping):
+            if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine", "mcp"} and isinstance(value, Mapping):
                 _apply_section(getattr(self, key), value)
             elif hasattr(self, key):
                 setattr(self, key, value)
@@ -278,7 +295,7 @@ class AriaXConfig:
 _SECTION_TYPES = {
     "llm": LLMConfig, "budget": BudgetConfig, "sandbox": SandboxConfig,
     "scope": ScopeConfig, "safety": SafetyConfig, "server": ServerConfig,
-    "engine": EngineConfig,
+    "engine": EngineConfig, "mcp": MCPConfig,
 }
 
 

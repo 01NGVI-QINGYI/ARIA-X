@@ -145,6 +145,27 @@ python -m aria_x doctor --llm
 Ollama 可直接用 `provider="ollama"`（默认 `http://127.0.0.1:11434/v1`）或
 `provider="openai"` + 自定义 `base_url`。
 
+#### NotHoly（攻击性安全模型）
+
+[NotHoly](https://notholy.com) 是面向攻击性安全研究的模型提供方，提供 uncensored / abliterated
+模型，覆盖渗透测试、漏洞研究、红队、逆向工程、OSINT、恶意软件分析等场景。网关兼容 OpenAI 接口，
+按 OpenAI 兼容方式接入即可：
+
+```toml
+[llm]
+provider = "openai"
+base_url = "https://api.notholy.com/v1"
+model = "notholy-vector"
+```
+
+```bash
+export ARIA_X_API_KEY="<你的 NotHoly key>"
+python -m aria_x doctor --llm
+```
+
+当前可用模型见 `GET https://api.notholy.com/v1/models`（无需鉴权）；接入文档见
+<https://docs.notholy.com>。
+
 ### 4.2 Anthropic
 
 ```toml

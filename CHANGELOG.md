@@ -3,6 +3,29 @@
 All notable changes to ARIA-X are documented here. ARIA-X is pre-1.0; interfaces may
 change, but persisted schema changes will include a migration note.
 
+## [Unreleased]
+
+### Added
+
+- **MCP tool servers (optional)**: a new `[mcp]` config table attaches remote
+  [Model Context Protocol](https://modelcontextprotocol.io) servers. Their tools are
+  loaded at registry build time and offered to the worker and the `researcher`
+  specialist as ordinary ARIA-X tools (`FunctionTool`), so they go through the same
+  approval policy as the built-ins. Generic by design — a server is just a URL plus
+  trusted headers; no provider is hard-coded.
+  - Transport is Streamable HTTP (JSON-RPC 2.0 over `POST`, JSON or SSE response),
+    built on `urllib`. **No new dependency.**
+  - Risk is mapped from each tool's MCP annotations (`readOnlyHint` → `low`,
+    `destructiveHint`/`openWorldHint` → `high`, otherwise `medium`) unless the server
+    config forces a `risk`. Risky tools are gated by `safety.approval` like any other.
+  - Opt-in and fail-open: with no `[mcp].servers` the default catalog is unchanged, and
+    an unreachable or misbehaving server is skipped with a warning rather than aborting
+    the run. A remote tool never shadows a built-in.
+  - **Scope note**: ARIA-X cannot see the traffic a remote server originates, so a remote
+    tool is not bounded by `[scope]`. Only attach servers you trust; for anything that may
+    touch a target, set the server `risk` high or set `requires_scope`.
+  - 18 new tests; see `docs/DEPLOYMENT.md` §4.5.
+
 ## [0.1.1] — 2026-11-10
 
 ### Added

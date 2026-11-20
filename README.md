@@ -105,6 +105,7 @@ ARIA-X 将上下文感知的智能体推理与结构化状态管理、工具执�
 - **离线端到端可验证**：运行 `./aria-x demo` 无需 API Key、无需联网，即可在本机 `127.0.0.1` 随机端口启动内置教学靶场，完整跑通 `Planner → Worker → Finding → Report` 全流程。
 - **Python 标准库零依赖**：运行时仅需 CPython 3.11+ 标准库，无需 `pip install` 任何第三方包。
 - **多模型无缝接入**：原生支持 OpenAI 兼容接口（DeepSeek、vLLM、Ollama、OpenRouter 等）与 Anthropic，同时提供 `mock` 与 `scenario` 两种确定性测试替身。
+- **可选 MCP 工具扩展**：通过 `[mcp]` 接入任意远程 [MCP](https://modelcontextprotocol.io) 服务器，其工具与内置工具一样走审批门交给 worker 与 researcher；通用、可选、标准库实现、不绑定服务商（详见 `docs/DEPLOYMENT.md` §4.5）。
 - **严格的 Scope 白名单**：所有目标网络工具在发出首个数据包前均调用 `Scope.require_url/require_host`；支持精确主机、通配域名、CIDR、`host:port`、URL 前缀、`deny` 规则与单主机限速；HTTP 重定向逐跳重新校验，无法解析的主机名默认拒绝。
 - **多后端隔离终端**：支持 `local`、`docker` 与 `mock` 三种沙箱后端；Docker 后端默认启用 `--network none`。
 - **分级审批门**：当 `safety.approval = "ask"` 时，`high` / `critical` 风险工具会生成审批记录并阻塞等待人工确认；`deny` 直接拒绝；`auto` 放行但依然受 Scope 与命令策略约束。

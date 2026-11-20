@@ -51,6 +51,7 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
 - **統合された実行制御**：対象 Scope のホワイトリスト、作業ディレクトリの制限、`local` / `docker` / `mock` サンドボックス、および `auto` / `ask` / `deny` の承認ポリシーを備えます。
 - **ローカル Web コンソール**：標準では `127.0.0.1:8787` にバインドし、外部 CDN に依存せず、SSE による更新、グラフ、検出結果、実行履歴、承認待ち項目を表示します。
 - **複数 LLM Provider**：OpenAI 互換 API、Anthropic、Ollama、Mock、Scenario に対応します。
+- **MCP ツールサーバー（任意）**：`[mcp]` で任意のリモート [MCP](https://modelcontextprotocol.io) サーバーを接続でき、そのツールは組み込みツールと同じ承認ゲートを通って worker と researcher に渡されます（`docs/DEPLOYMENT.md` §4.5）。
 - **証拠に基づく成果物**：SQLite、JSONL イベント・監査記録に加えて、`report.md`、`report.html`、`findings.json` を出力します。
 
 ## アーキテクチャ

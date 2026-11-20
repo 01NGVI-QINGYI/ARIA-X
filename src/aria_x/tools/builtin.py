@@ -44,6 +44,13 @@ def build_registry(ctx: ToolContext | None = None) -> ToolRegistry:
     session.register(registry)
     net.register(registry)
     knowledge.register(registry)
+
+    # Optional: tools from remote MCP servers declared in [mcp]. Opt-in, so the
+    # default catalog (and its contract) is unchanged when no server is set.
+    mcp_config = getattr(getattr(ctx, "config", None), "mcp", None)
+    if mcp_config is not None and getattr(mcp_config, "servers", None):
+        from . import mcp
+        mcp.register(registry, mcp_config, emit=getattr(ctx, "emit", None))
     return registry
 
 

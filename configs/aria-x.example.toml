@@ -67,3 +67,13 @@ bootstrap = true
 max_idle_rounds = 2
 max_concurrency = 2
 skills_dir = "skills"
+
+# Optional: attach remote MCP tool servers. Their tools are offered to the worker
+# and the researcher specialist under the same approval gate as the built-ins.
+# Omit this whole section to keep only the built-in tools. See docs/DEPLOYMENT.md §4.5.
+# [mcp]
+# [[mcp.servers]]
+# name = "notholy"
+# url = "https://api.notholy.com/mcp"
+# headers = { Authorization = "Bearer ${NOTHOLY_API_KEY}" }
+# risk = "high"            # optional: a remote tool is not bounded by [scope]

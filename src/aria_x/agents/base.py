@@ -38,9 +38,15 @@ class AgentSpec:
     max_tokens: int = 4096
     json_contract: dict[str, Any] | None = None
     finalize_instruction: str = ""
+    include_mcp: bool = False              # also offer any MCP-sourced tools (tag "mcp")
 
     def allowed_tools(self, registry: ToolRegistry) -> list[dict[str, Any]]:
-        return registry.specs(self.tools)
+        specs = registry.specs(self.tools)
+        if self.include_mcp:
+            named = set(self.tools)
+            specs += [t.spec.to_llm() for t in registry.tools()
+                      if "mcp" in t.spec.tags and t.spec.name not in named]
+        return specs
 
 
 @dataclass(slots=True)

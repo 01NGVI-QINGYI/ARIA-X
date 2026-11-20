@@ -254,6 +254,17 @@ session_close(s_ab12cd34ef)
 即使审批通过，也**不会**扩大 scope：目标授权始终由 `Scope` 独立强制。
 没有挂接审批器（例如在库中直接构造 `ToolContext`）时，`ask` 模式会安全失败（拒绝）。
 
+## MCP 工具（可选）
+
+除内置工具外，可通过 `[mcp]` 接入远程 [MCP](https://modelcontextprotocol.io) 服务器的工具
+（见 `docs/DEPLOYMENT.md` §4.5）。它们在构建注册表时拉取、包装成 `FunctionTool`，带 `mcp` tag，
+交给 worker 与 `researcher` specialist，并和内置工具一样经过审批门。风险等级默认由工具的
+annotation 推导（`readOnlyHint` → `low`，`destructiveHint`/`openWorldHint` → `high`，其余
+`medium`）或由 server 配置强制。不配置任何 server 时，工具集与上表完全一致。
+
+> 远程工具由远程 server 执行，ARIA-X 看不到其发起的流量，因此**不受 `Scope` 约束**——
+> 只接入可信 server，可能触达目标的工具请设高风险或 `requires_scope`。
+
 ## 工具开发约定
 
 新增工具时：

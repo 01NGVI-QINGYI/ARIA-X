@@ -105,8 +105,8 @@ ARIA-X 将上下文感知的智能体推理与结构化状态管理、工具执�
 - **离线端到端可验证**：运行 `./aria-x demo` 无需 API Key、无需联网，即可在本机 `127.0.0.1` 随机端口启动内置教学靶场，完整跑通 `Planner → Worker → Finding → Report` 全流程。
 - **Python 标准库零依赖**：运行时仅需 CPython 3.11+ 标准库，无需 `pip install` 任何第三方包。
 - **多模型无缝接入**：原生支持 OpenAI 兼容接口（DeepSeek、vLLM、Ollama、OpenRouter 等）与 Anthropic，同时提供 `mock` 与 `scenario` 两种确定性测试替身。
-- **严格的 Scope 白名单**：所有目标网络工具在发出首个数据包前均调用 `Scope.require_url/require_host`；支持精确主机、通配域名、CIDR、`host:port`、URL 前缀、`deny` 规则与单主机限速；HTTP 重定向逐跳重新校验，无法解析的主机名默认拒绝。
-- **多后端隔离终端**：支持 `local`、`docker` 与 `mock` 三种沙箱后端；Docker 后端默认启用 `--network none`。
+- **严格的 Scope 白名单**：所有目标网络工具在发出首个数据包前均调用 `Scope.require_url/require_host`；支持精确主机、通配域名、CIDR、`host:port`、URL 前缀、`deny` 规则与单主机限速；HTTP 重定向逐跳重新校验；当 `safety.allow_public_targets = false` 时，无法解析的主机名也会按失败关闭（fail-closed）拒绝。
+- **多后端隔离终端**：支持 `local`、`docker` 与 `mock` 三种沙箱后端；示例配置与 `aria-x init` 生成的模板预设 `sandbox.network = "none"`（`SandboxConfig` 程序内置默认值为 `"bridge"`）。
 - **分级审批门**：当 `safety.approval = "ask"` 时，`high` / `critical` 风险工具会生成审批记录并阻塞等待人工确认；`deny` 直接拒绝；`auto` 放行但依然受 Scope 与命令策略约束。
 - **结构化证据链报告**：每次运行在 `runs/<run_id>/` 下生成 `report.md`、`report.html` 与 `findings.json`，并与 SQLite 状态图、JSONL 事件流及审计表一一对应。
 - **零 CDN 本地控制台**：内置基于原生 HTML/CSS/JS 与 SSE 实时事件流的本地 Web 控制台（默认仅绑定 `127.0.0.1:8787`，支持 Bearer Token 认证）。
@@ -222,11 +222,15 @@ export ARIA_X_API_KEY="your-api-key"
 任务完成后，可通过命令行查看持久化结果：
 
 ```bash
-./aria-x projects                   # 查看项目列表
-./aria-x graph                      # 查看最新项目的黑板与状态图摘要
-./aria-x report                     # 打印最新报告路径（加 --open 可直接打开）
-./aria-x export -o out.json         # 导出完整项目图谱与证据 JSON
+./aria-x projects                               # 查看项目列表
+./aria-x graph                                  # 查看最新项目的黑板与状态图摘要
+./aria-x report                                 # 打印最新报告路径（加 --open 可直接打开）
+./aria-x report <run_id>                        # 按运行 ID 精确查询报告路径
+./aria-x report --project-id <project_id>       # 按项目 ID 查询最新报告路径
+./aria-x export -o out.json                     # 导出完整项目图谱与证据 JSON
 ```
+
+> `aria-x report` 全程只读查询 SQLite（不初始化空库）并校验目录与元数据归属；嵌套目录、旧式平铺与时间戳归档的兼容规则见 [CHANGELOG.md](CHANGELOG.md)。
 
 ### 4. 启动本地 Web 控制台
 
@@ -249,7 +253,7 @@ export ARIA_X_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(
 | `aria-x serve` | 启动本地 Web 控制台（默认绑定 `127.0.0.1:8787`） |
 | `aria-x doctor [--llm]` | 检查 Python 版本、配置、目录、工具、引擎、沙箱及模型连通性 |
 | `aria-x tools [--json]` | 列出全部 27 个内置工具的名称、风险等级与 Scope 要求 |
-| `aria-x projects / graph / report / export` | 查询项目列表、状态图摘要、报告路径或导出完整 JSON |
+| `aria-x projects / graph / report / export` | 查询项目列表、状态图摘要、报告路径（支持 `report <run_id>` 与 `report --project-id <project_id>`，旧归档兼容见 [CHANGELOG.md](CHANGELOG.md)）或导出完整 JSON |
 
 - **全局参数**：`-c/--config <path>`（可置于子命令前或后）、`--version`。
 - **退出码**：`0` 正常完成、`1` 运行未完成、`2` 配置或参数错误、`130` 人工中断。
@@ -295,7 +299,7 @@ max_total_intents = 40
 [sandbox]
 backend = "local"              # local | docker | mock
 image = "python:3.12-slim"
-network = "none"               # 默认禁用容器网络；仅在隔离实验环境按需调整
+network = "none"               # 示例与 init 模板禁用容器网络（SandboxConfig 内置默认值为 "bridge"）；仅在隔离实验环境按需调整
 timeout = 120
 
 [safety]
@@ -362,12 +366,12 @@ ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执�
 
 ### 1. 内置执行控制
 - **强制启动授权门**：配置文件必须同时满足 `scope.authorized = true` 且 `scope.targets` 非空，否则直接抛出 `ConfigError` 终止启动。
-- **目标级 Scope 校验**：支持精确主机、通配域名、CIDR、`host:port` 与 URL 前缀；`deny` 规则优先于 `allow`；HTTP 重定向逐跳重新鉴权；无法解析的主机名默认拒绝。
+- **目标级 Scope 校验**：支持精确主机、通配域名、CIDR、`host:port` 与 URL 前缀；`deny` 规则优先于 `allow`；HTTP 重定向逐跳重新鉴权；在 `safety.allow_public_targets = false` 时，无法解析的主机名也会拒绝放行。
 - **高风险工具审批门**：支持 `auto`（受 Scope 与命令策略约束下放行）、`ask`（创建审批事件并阻塞等待人工确认，最长 300 秒）与 `deny`（直接拒绝并写入审计日志）。
 
 ### 2. 当前版本的设计定位
 - **模型推理与证据相结合**：模型负责提出探索方向，工具输出与记录的证据支撑发现；复杂结论仍需研究者核验。
-- **分层执行控制**：`CommandPolicy` 提供启发式命令过滤；进程级隔离可使用 Docker 后端（默认 `--network none`）。命令过滤本身不等于操作系统沙箱。
+- **分层执行控制**：`CommandPolicy` 提供启发式命令过滤；进程级隔离可使用 Docker 后端（示例配置与 `aria-x init` 模板预设 `network = "none"`，程序内置默认值为 `bridge`）。命令过滤本身不等于操作系统沙箱。
 - **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.2.0 的实现范围。
 - **面向验证的工具集**：内置工具聚焦受控验证、状态管理与报告，不打包独立漏洞利用载荷或第三方扫描器。
 - **明确的演进方向**：专用 Prompt Injection 分类器和中断运行的原位恢复尚未实现，相关计划见 [开发路线图](docs/ROADMAP.md)。
@@ -413,7 +417,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
   aria-x:0.2.0
 ```
 
-容器镜像仅包含 ARIA-X 标准库核心代码，不打包任何第三方扫描器。详细部署说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
+容器镜像仅包含 ARIA-X 标准库核心代码，不打包任何第三方扫描器。使用 `docker/docker-compose.yml` 启动时，必须显式设置非空环境变量 `ARIA_X_AUTH_TOKEN`（未设置或为空将拒绝启动）。详细部署说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
 ### 测试与离线验证门
 

@@ -48,7 +48,7 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
 - **役割別マルチエージェント構成**：Planner、Bootstrap、Worker、Reporter と、`researcher` / `coder` / `adviser` / `memorist` の専門エージェントを分離します。
 - **27 種類の内蔵ツール**：ファイル・ターミナル操作、HTTP/DNS/TCP/TLS 検証、ブラックボード・資産管理、検索、専門エージェントへの委任、目標検証などを提供します。
 - **対話型 PTY セッション（v0.1.1 で追加）**：`session_open`、`session_send`、`session_read`、`session_close`、`session_list` により、対話が必要なターミナルプログラムを隔離されたローカル実験環境で扱えます。セッションの開始と入力送信は高リスク操作であり、Scope・コマンドポリシー・承認ゲートの対象です。同時セッション数は実行ごとに最大 4 件で、アイドル時の清掃処理も備えます。
-- **統合された実行制御**：対象 Scope のホワイトリスト、作業ディレクトリの制限、`local` / `docker` / `mock` サンドボックス、および `auto` / `ask` / `deny` の承認ポリシーを備えます。
+- **統合された実行制御**：対象 Scope のホワイトリスト（HTTP リダイレクトの各ホップ再検証に加え、`safety.allow_public_targets = false` の場合は名前解決できないホストも拒否）、作業ディレクトリの制限、`local` / `docker` / `mock` サンドボックス、および `auto` / `ask` / `deny` の承認ポリシーを備えます。
 - **ローカル Web コンソール**：標準では `127.0.0.1:8787` にバインドし、外部 CDN に依存せず、SSE による更新、グラフ、検出結果、実行履歴、承認待ち項目を表示します。設定画面で `English` / `简体中文` / `日本語` を切り替え可能（既定は英語、ブラウザの `localStorage` に保存され、レポート本文は書き換えません）。
 - **複数 LLM Provider**：OpenAI 互換 API、Anthropic、Ollama、Mock、Scenario に対応します。
 - **証拠に基づく成果物**：SQLite、JSONL イベント・監査記録に加えて、`report.md`、`report.html`、`findings.json` を出力します。`aria_x.report.render` は明示的な `en` / `zh-CN` / `ja` テンプレートに対応しつつ、既存の CLI / Demo 入口では既定で英語の固定見出しを使用します。
@@ -120,12 +120,16 @@ export ARIA_X_API_KEY="your-api-key"
 ./aria-x projects
 ./aria-x graph
 ./aria-x report
+./aria-x report <run_id>
+./aria-x report --project-id <project_id>
 ./aria-x export -o out.json
 
 # Web コンソール
 export ARIA_X_AUTH_TOKEN="$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
 ./aria-x serve --open
 ```
+
+> `aria-x report` は SQLite を読み取り専用で参照し（空 DB は初期化しません）、ディレクトリとメタデータの帰属を検証します。旧アーカイブ形式との互換仕様は [CHANGELOG.md](CHANGELOG.md) を参照してください。
 
 ## コンソールの画面
 
@@ -147,7 +151,7 @@ ARIA-X は、対象 Scope、承認ゲート、コマンドポリシー、監査�
 
 **現行バージョンの設計範囲**：
 - **証拠を伴う推論**：モデルによる探索と、ツール出力に基づく検証を組み合わせます。複雑な結論は研究者による確認を前提とします。
-- **段階的な実行制御**：`CommandPolicy` はヒューリスティックなフィルタリングを担当します。プロセス隔離には Docker バックエンド（標準では `--network none`）を利用します。
+- **段階的な実行制御**：`CommandPolicy` はヒューリスティックなフィルタリングを担当します。プロセス隔離には Docker バックエンドを利用でき、サンプル設定および `aria-x init` が生成するテンプレートでは `sandbox.network = "none"` を既定とします（コード内蔵の `SandboxConfig` の既定値は `"bridge"`）。また、`docker/docker-compose.yml` を使用する場合は空でない `ARIA_X_AUTH_TOKEN` の明示的な設定が必須です（詳細は [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) を参照）。
 - **ローカル研究への最適化**：SQLite WAL による状態管理を採用しています。分散クラスタ実行、専用の Prompt Injection 分類器、クラッシュ後の途中再開は今後の開発課題です。
 
 **利用範囲**：本プロジェクトは完全に隔離されたローカル実験環境での学習、研究、原理検証を対象とします。オンラインサービスやネットワークシステムに対するスキャン・侵入テストには、所有権や許可の有無にかかわらず使用しないでください。詳細は [利用条件](README.en.md#license--usage-boundaries) と [セキュリティモデル](docs/SECURITY.md) を参照してください。

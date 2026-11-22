@@ -229,6 +229,7 @@ class CliReportResolutionTests(unittest.TestCase):
                 self.assertEqual(rc, 2, f"expected 2 for {miss}")
 
             for hit in (
+                {"project_id": None, "run_id": None},
                 {"project_id": None, "run_id": "run_legacy"},
                 {"project_id": "p_legacy", "run_id": None},
                 {"project_id": "p_legacy", "run_id": "run_legacy"},
@@ -248,6 +249,7 @@ class CliReportResolutionTests(unittest.TestCase):
                         encoding="utf-8",
                     )
                 for hit in (
+                    {"project_id": None, "run_id": None},
                     {"project_id": None, "run_id": "run_legacy"},
                     {"project_id": "p_legacy", "run_id": None},
                     {"project_id": "p_legacy", "run_id": "run_legacy"},
@@ -257,6 +259,215 @@ class CliReportResolutionTests(unittest.TestCase):
                         rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
                     self.assertEqual(rc, 0, (with_meta, hit))
                     self.assertEqual(Path(buf.getvalue().strip()).resolve(), leg_rep.resolve())
+
+    def test_legacy_flat_archive_consistent_across_all_entry_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+
+            leg_dir = runs_dir / "p_legacy-run_legacy"
+            leg_dir.mkdir()
+            leg_rep = leg_dir / "report.html"
+            leg_rep.write_text("<html>legacy flat</html>", encoding="utf-8")
+            (leg_dir / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_legacy"}, "meta": {"run_id": "run_legacy"}}),
+                encoding="utf-8",
+            )
+
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                                encoding="utf-8")
+            db_path = data_dir / "aria-x.db"
+
+            for mode in ("no_db", "zero_bytes", "zero_tables", "matching_db"):
+                if mode == "no_db":
+                    db_path.unlink(missing_ok=True)
+                elif mode == "zero_bytes":
+                    db_path.write_bytes(b"")
+                elif mode == "zero_tables":
+                    db_path.unlink(missing_ok=True)
+                    c = sqlite3.connect(db_path)
+                    c.close()
+                else:
+                    db_path.unlink(missing_ok=True)
+                    store = Store(str(db_path))
+                    try:
+                        store.create_project(Project(id="p_legacy", name="Legacy", goal="g"))
+                        store.create_run(Run(id="run_legacy", project_id="p_legacy", status="completed",
+                                             started_at="2026-11-01T00:00:00Z"))
+                    finally:
+                        store.close()
+
+                size_before = db_path.stat().st_size if db_path.exists() else None
+                for hit in (
+                    {"project_id": None, "run_id": None},
+                    {"project_id": None, "run_id": "run_legacy"},
+                    {"project_id": "p_legacy", "run_id": None},
+                    {"project_id": "p_legacy", "run_id": "run_legacy"},
+                ):
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
+                    self.assertEqual(rc, 0, (mode, hit))
+                    self.assertEqual(Path(buf.getvalue().strip()).resolve(), leg_rep.resolve())
+
+                for miss in (
+                    {"project_id": None, "run_id": "run_leg"},
+                    {"project_id": "p_leg", "run_id": None},
+                    {"project_id": "p_other", "run_id": None},
+                    {"project_id": "p_other", "run_id": "run_legacy"},
+                ):
+                    rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **miss))
+                    self.assertEqual(rc, 2, (mode, miss))
+
+                if mode in ("zero_bytes", "zero_tables"):
+                    self.assertEqual(db_path.stat().st_size, size_before)
+                    check_conn = sqlite3.connect(db_path)
+                    try:
+                        self.assertEqual(
+                            check_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(),
+                            [],
+                        )
+                    finally:
+                        check_conn.close()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+            bad_dir = runs_dir / "p_A-run_bad"
+            bad_dir.mkdir()
+            (bad_dir / "report.html").write_text("<html>conflict</html>", encoding="utf-8")
+            (bad_dir / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_B"}, "meta": {"run_id": "run_bad"}}),
+                encoding="utf-8",
+            )
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                                encoding="utf-8")
+            for query in (
+                {"project_id": None, "run_id": None},
+                {"project_id": None, "run_id": "run_bad"},
+                {"project_id": "p_A", "run_id": None},
+                {"project_id": "p_B", "run_id": None},
+                {"project_id": "p_A", "run_id": "run_bad"},
+                {"project_id": "p_B", "run_id": "run_bad"},
+            ):
+                rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **query))
+                self.assertEqual(rc, 2, query)
+
+    def test_older_run_beyond_1000_db_conflict_rejected_and_valid_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+            cfg = AriaXConfig(data_dir=str(data_dir), runs_dir=str(runs_dir))
+            store = Store(cfg.db_path)
+            try:
+                store.create_project(Project(id="p_A", name="Project A", goal="goal A"))
+                store.create_project(Project(id="p_B", name="Project B", goal="goal B"))
+                store.create_project(Project(id="p_valid_old", name="Valid Old", goal="goal old"))
+                store.create_project(Project(id="p_filler", name="Filler", goal="filler"))
+                store.create_run(Run(
+                    id="run_oldest_conflict",
+                    project_id="p_A",
+                    status="completed",
+                    started_at="2020-01-01T00:00:01Z",
+                ))
+                store.create_run(Run(
+                    id="run_oldest_valid",
+                    project_id="p_valid_old",
+                    status="completed",
+                    started_at="2020-01-01T00:00:02Z",
+                ))
+            finally:
+                store.close()
+
+            filler_rows = [
+                (
+                    f"run_filler_{i:04d}",
+                    "p_filler",
+                    "completed",
+                    f"2026-01-01T{i // 3600:02d}:{(i // 60) % 60:02d}:{i % 60:02d}Z",
+                )
+                for i in range(1003)
+            ]
+            raw_conn = sqlite3.connect(cfg.db_path)
+            try:
+                with raw_conn:
+                    raw_conn.executemany(
+                        "INSERT INTO runs(id, project_id, status, started_at) VALUES(?,?,?,?)",
+                        filler_rows,
+                    )
+            finally:
+                raw_conn.close()
+
+            # 3 conflicting archives for run_oldest_conflict (DB -> p_A, disk/metadata -> p_B)
+            c_flat = runs_dir / "run_oldest_conflict"
+            c_flat.mkdir()
+            c_flat_rep = c_flat / "report.html"
+            c_flat_rep.write_text("<html>conflict flat</html>", encoding="utf-8")
+            (c_flat / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_B"}, "meta": {"run_id": "run_oldest_conflict"}}),
+                encoding="utf-8",
+            )
+            os.utime(c_flat_rep, (1950000000, 1950000000))
+
+            c_legacy = runs_dir / "p_B-run_oldest_conflict"
+            c_legacy.mkdir()
+            c_legacy_rep = c_legacy / "report.html"
+            c_legacy_rep.write_text("<html>conflict legacy</html>", encoding="utf-8")
+            (c_legacy / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_B"}, "meta": {"run_id": "run_oldest_conflict"}}),
+                encoding="utf-8",
+            )
+            os.utime(c_legacy_rep, (1960000000, 1960000000))
+
+            c_nested = runs_dir / "p_B" / "run_oldest_conflict"
+            c_nested.mkdir(parents=True)
+            c_nested_rep = c_nested / "report.html"
+            c_nested_rep.write_text("<html>conflict nested</html>", encoding="utf-8")
+            os.utime(c_nested_rep, (1970000000, 1970000000))
+
+            # 1 valid old archive for run_oldest_valid (DB -> p_valid_old, older mtime)
+            valid_dir = runs_dir / "run_oldest_valid"
+            valid_dir.mkdir()
+            valid_rep = valid_dir / "report.html"
+            valid_rep.write_text("<html>valid old</html>", encoding="utf-8")
+            os.utime(valid_rep, (1700000000, 1700000000))
+
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                                encoding="utf-8")
+
+            for miss in (
+                {"project_id": "p_B", "run_id": None},
+                {"project_id": "p_A", "run_id": None},
+                {"project_id": None, "run_id": "run_oldest_conflict"},
+                {"project_id": "p_B", "run_id": "run_oldest_conflict"},
+                {"project_id": "p_A", "run_id": "run_oldest_conflict"},
+            ):
+                rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **miss))
+                self.assertEqual(rc, 2, miss)
+
+            for hit in (
+                {"project_id": None, "run_id": None},
+                {"project_id": "p_valid_old", "run_id": None},
+                {"project_id": None, "run_id": "run_oldest_valid"},
+                {"project_id": "p_valid_old", "run_id": "run_oldest_valid"},
+            ):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
+                self.assertEqual(rc, 0, hit)
+                self.assertEqual(Path(buf.getvalue().strip()).resolve(), valid_rep.resolve())
 
     def test_web_load_report_binds_preview_and_download_to_same_run(self) -> None:
         node = shutil.which("node") or "/opt/homebrew/bin/node"

@@ -545,3 +545,160 @@ async function flush() {
         ], capture_output=True, text=True, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("WEB_REPORT_RACE_OK", proc.stdout)
+
+    def test_web_graph_race_guards_and_timer_cancellation(self) -> None:
+        node = shutil.which("node") or "/opt/homebrew/bin/node"
+        if not Path(node).exists():
+            self.skipTest("node not installed")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+const i18nCode = fs.readFileSync(process.argv[1], "utf8");
+const appCode = fs.readFileSync(process.argv[2], "utf8");
+
+const elements = {};
+function makeEl(id) {
+  return {
+    id, hidden: false, disabled: false, value: "", textContent: "", srcdoc: "", href: "",
+    className: "", children: [], style: {},
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute(k, v) { this[k] = v; if (k === "hidden") this.hidden = true; },
+    removeAttribute(k) { delete this[k]; if (k === "hidden") this.hidden = false; },
+    addEventListener() {},
+    querySelector() { return null; },
+    appendChild(c) { this.children.push(c); return c; },
+    append(...cs) { cs.forEach(c => this.appendChild(c)); },
+    replaceChildren(...cs) { this.children = cs; },
+  };
+}
+for (const id of [
+  "report-empty", "report-frame", "report-meta", "report-open", "report-markdown",
+  "project-select", "overview-empty", "overview-content", "project-name", "project-goal",
+  "run-id", "run-state", "run-chip", "btn-start", "btn-stop", "approval-list",
+  "approval-count", "conn-pill", "conn-text", "sse-status", "timeline-pulse",
+  "timeline-log", "timeline-empty", "timeline-count", "timeline-autoscroll", "timeline-type",
+  "graph-svg", "graph-empty", "graph-count", "graph-detail", "graph-legend",
+]) {
+  elements[id] = makeEl(id);
+}
+
+const deferred = [];
+const scheduledTimers = new Map();
+let nextTimerId = 1;
+const clearedTimers = [];
+
+const ctx = {
+  document: {
+    documentElement: { lang: "en" },
+    title: "",
+    getElementById: (id) => elements[id] || makeEl(id),
+    querySelectorAll: () => [],
+    createElement: (tag) => makeEl(tag),
+    createElementNS: (_ns, tag) => makeEl(tag),
+    addEventListener: () => {},
+  },
+  window: {
+    location: { hash: "#graph" },
+    addEventListener: () => {},
+    setTimeout: (fn, ms) => { const id = nextTimerId++; scheduledTimers.set(id, { fn, ms }); return id; },
+    clearTimeout: (id) => { if (id) { clearedTimers.push(id); scheduledTimers.delete(id); } },
+    history: { replaceState: () => {} },
+    scrollTo: () => {},
+  },
+  localStorage: { getItem: () => "", setItem: () => {}, removeItem: () => {} },
+  EventSource: class { close() {} },
+  URL: { createObjectURL: () => "blob:0", revokeObjectURL() {} },
+  Blob: class {},
+  fetch: (url) => new Promise((res, rej) => { deferred.push({ url, res, rej }); }),
+  setTimeout,
+  clearTimeout,
+};
+Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+ctx.window.ARIA_X_I18N = undefined;
+vm.runInNewContext(i18nCode, ctx);
+const patched = appCode.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, ensureGraph, renderGraph, selectProject, maybeRefreshForEvent };\n})();");
+vm.runInNewContext(patched, ctx);
+
+function jsonResp(obj) {
+  return { ok: true, status: 200, text: async () => JSON.stringify(obj), headers: new Map() };
+}
+function takeDeferred(urlSub) {
+  const idx = deferred.findIndex(d => d.url.includes(urlSub));
+  assert(idx !== -1, "missing deferred for " + urlSub);
+  return deferred.splice(idx, 1)[0];
+}
+async function flush() {
+  for (let i = 0; i < 4; i += 1) await new Promise(r => setTimeout(r, 2));
+}
+
+(async () => {
+  const { state, ensureGraph, renderGraph, selectProject, maybeRefreshForEvent } = ctx.__TEST__;
+
+  // 1. Cross-project delayed graph response: A starts, user switches to B, B renders, A resolves late.
+  state.tab = "graph";
+  state.projectId = "projA";
+  const pA = ensureGraph().then(ok => { if (ok) renderGraph(); });
+
+  state.projectId = "projB";
+  const pB = ensureGraph().then(ok => { if (ok) renderGraph(); });
+
+  takeDeferred("/api/projects/projB/graph").res(jsonResp({
+    nodes: [{ id: "b1", kind: "goal", title: "Goal B", status: "open" }],
+    edges: [], assets: [],
+  }));
+  await pB;
+  await flush();
+  assert.strictEqual(state.graph.nodes[0].id, "b1");
+  assert(elements["graph-count"].textContent.startsWith("1 nodes"), elements["graph-count"].textContent);
+
+  // Late A resolves -> must be ignored
+  takeDeferred("/api/projects/projA/graph").res(jsonResp({
+    nodes: [
+      { id: "a1", kind: "goal", title: "Goal A1", status: "open" },
+      { id: "a2", kind: "fact", title: "Fact A2", status: "done" },
+    ],
+    edges: [], assets: [],
+  }));
+  await pA;
+  await flush();
+  assert.strictEqual(state.graph.nodes[0].id, "b1", "stale A graph overwrote B");
+  assert(elements["graph-count"].textContent.startsWith("1 nodes"), "stale A graph count overwrote B");
+
+  // 2. Consecutive same-project graph refreshes: #1 slow, #2 fast
+  const g1 = ensureGraph().then(ok => { if (ok) renderGraph(); });
+  const g2 = ensureGraph().then(ok => { if (ok) renderGraph(); });
+  const idx2 = deferred.map(d => d.url).lastIndexOf("/api/projects/projB/graph");
+  deferred.splice(idx2, 1)[0].res(jsonResp({
+    nodes: [{ id: "b_new", kind: "goal", title: "Goal B New", status: "open" }],
+    edges: [], assets: [],
+  }));
+  await g2;
+  await flush();
+  assert.strictEqual(state.graph.nodes[0].id, "b_new");
+  takeDeferred("/api/projects/projB/graph").res(jsonResp({
+    nodes: [{ id: "b_old", kind: "goal", title: "Goal B Old", status: "open" }],
+    edges: [], assets: [],
+  }));
+  await g1;
+  await flush();
+  assert.strictEqual(state.graph.nodes[0].id, "b_new", "stale same-project graph overwrote newer");
+
+  // 3. Project switch / clear cancels pending graphRefreshTimer
+  maybeRefreshForEvent("node.created");
+  assert(state.graphRefreshTimer !== null, "expected graphRefreshTimer to be scheduled");
+  const timerId = state.graphRefreshTimer;
+  await selectProject("");
+  assert.strictEqual(state.graphRefreshTimer, null, "graphRefreshTimer must be cleared");
+  assert(clearedTimers.includes(timerId), "clearTimeout must be called for old graphRefreshTimer");
+  assert.strictEqual(state.graph, null);
+  console.log("WEB_GRAPH_RACE_OK");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+        proc = subprocess.run([
+            node, "-e", script,
+            str(ROOT / "src" / "aria_x" / "web" / "i18n.js"),
+            str(ROOT / "src" / "aria_x" / "web" / "app.js"),
+        ], capture_output=True, text=True, timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("WEB_GRAPH_RACE_OK", proc.stdout)

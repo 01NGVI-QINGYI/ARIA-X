@@ -79,6 +79,7 @@
     refreshing: false,
     refreshSeq: 0,
     graphRefreshTimer: null,
+    graphSeq: 0,
     authWarned: false,
     reportHtml: "",
     reportMd: "",
@@ -323,7 +324,7 @@
       panel.hidden = panel.id !== `panel-${name}`;
     }
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    if (name === "graph") { ensureGraph().then(renderGraph).catch(() => {}); }
+    if (name === "graph") { ensureGraph().then((ok) => { if (ok) renderGraph(); }).catch(() => {}); }
     if (name === "report") { loadReport().catch(() => {}); }
     if (name === "settings") { loadSettings().catch(() => {}); }
     if (name === "timeline") { renderTimeline(); scrollTimeline(); }
@@ -406,6 +407,7 @@
     state.eventTypes = new Set();
     renderTimelineEvents();
     resetReportView(state.projectId ? "initial" : "noProject");
+    resetGraphView();
     if (!state.projectId) { clearProject(); return; }
     connectSSE();
     await refreshProject({ full: true, force: true });
@@ -425,6 +427,7 @@
     $("approval-list").replaceChildren(el("p", "muted", t("approvals.selectFirst")));
     $("approval-count").textContent = t("approvals.pending", { count: 0 });
     resetReportView("noProject");
+    resetGraphView();
     if (state.es) { state.es.close(); state.es = null; }
     setSseStatus(false);
   }
@@ -473,9 +476,9 @@
       renderAssets();
       renderTodos();
       if (state.tab === "graph") {
-        await ensureGraph();
+        const updated = await ensureGraph();
         if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
-        renderGraph();
+        if (updated) renderGraph();
       }
       if (full && state.tab === "report") { await loadReport(); }
     } catch (error) {
@@ -968,12 +971,31 @@
 
   // ------------------------------------------------------------------- graph
 
+  function resetGraphView() {
+    state.graphSeq += 1;
+    if (state.graphRefreshTimer) {
+      window.clearTimeout(state.graphRefreshTimer);
+      state.graphRefreshTimer = null;
+    }
+    state.graph = null;
+    state.selectedNodeId = "";
+    renderGraph();
+  }
+
   async function ensureGraph() {
-    if (!state.projectId) return;
+    const projectId = state.projectId;
+    const reqSeq = ++state.graphSeq;
+    const isCurrent = () => reqSeq === state.graphSeq && projectId === state.projectId;
+    if (!projectId) return false;
     try {
-      state.graph = await api(`/api/projects/${encodeURIComponent(state.projectId)}/graph`);
+      const graph = await api(`/api/projects/${encodeURIComponent(projectId)}/graph`);
+      if (!isCurrent()) return false;
+      state.graph = graph;
+      return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       if (error.status !== 401) toast(t("toast.graphUnavailable", { message: error.message }), "bad");
+      return false;
     }
   }
 
@@ -1335,9 +1357,12 @@
         type.startsWith("approval.") || type === "hint" || type === "budget") {
       debouncedRefresh();
       if (state.tab === "graph") {
+        const scheduledProject = state.projectId;
         window.clearTimeout(state.graphRefreshTimer);
         state.graphRefreshTimer = window.setTimeout(() => {
-          ensureGraph().then(renderGraph).catch(() => {});
+          state.graphRefreshTimer = null;
+          if (!scheduledProject || state.projectId !== scheduledProject || state.tab !== "graph") return;
+          ensureGraph().then((ok) => { if (ok) renderGraph(); }).catch(() => {});
         }, 700);
       }
     }
@@ -1764,7 +1789,7 @@
       renderAssets();
     });
     $("graph-fit").addEventListener("click", () => {
-      if (!state.graph) { ensureGraph().then(renderGraph).catch(() => {}); }
+      if (!state.graph) { ensureGraph().then((ok) => { if (ok) renderGraph(); }).catch(() => {}); }
       else renderGraph();
     });
     $("timeline-filter").addEventListener("input", (event) => {

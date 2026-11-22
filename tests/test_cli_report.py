@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -73,6 +74,87 @@ class CliReportResolutionTests(unittest.TestCase):
                 rc = cmd_report(ns_exact)
             self.assertEqual(rc, 0)
             self.assertEqual(Path(buf_exact.getvalue().strip()).resolve(), old_rep.resolve())
+
+    def test_nested_archives_exact_ids_traversal_and_readonly_sqlite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+
+            # Outside directory that must never be leaked via traversal
+            outside = base / "outside"
+            outside.mkdir()
+            (outside / "report.html").write_text("<html>outside</html>", encoding="utf-8")
+
+            # Nested demo-style archive: runs/demo-20261122/run_10/ with findings.json attribution
+            demo_dir = runs_dir / "demo-20261122" / "run_10"
+            demo_dir.mkdir(parents=True)
+            demo_rep = demo_dir / "report.html"
+            demo_rep.write_text("<html>demo run_10</html>", encoding="utf-8")
+            (demo_dir / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_10"}, "meta": {"run_id": "run_10"}}),
+                encoding="utf-8",
+            )
+            os.utime(demo_rep, (1900000000, 1900000000))
+
+            # Unattributed flat report that must NOT match --project-id p_unknown
+            unattributed = runs_dir / "run_99"
+            unattributed.mkdir()
+            (unattributed / "report.md").write_text("# unattributed", encoding="utf-8")
+
+            # 1. Test against a 0-table empty SQLite DB AND a 0-byte DB file
+            for empty_mode in ("zero_bytes", "zero_tables"):
+                cfg_path = base / f"cfg-{empty_mode}.json"
+                cfg_path.write_text(json.dumps({
+                    "data_dir": str(data_dir),
+                    "runs_dir": str(runs_dir),
+                }), encoding="utf-8")
+                default_db = data_dir / "aria-x.db"
+                if empty_mode == "zero_bytes":
+                    default_db.write_bytes(b"")
+                else:
+                    default_db.unlink(missing_ok=True)
+                    c = sqlite3.connect(default_db)
+                    c.close()
+                size_before = default_db.stat().st_size
+
+                # Exact run_id and project_id find nested demo report
+                for extra in (
+                    {"project_id": None, "run_id": "run_10"},
+                    {"project_id": "p_10", "run_id": None},
+                    {"project_id": "p_10", "run_id": "run_10"},
+                    {"project_id": None, "run_id": None},
+                ):
+                    buf = io.StringIO()
+                    ns = argparse.Namespace(config=str(cfg_path), open=False, **extra)
+                    with redirect_stdout(buf):
+                        rc = cmd_report(ns)
+                    self.assertEqual(rc, 0, extra)
+                    self.assertEqual(Path(buf.getvalue().strip()).resolve(), demo_rep.resolve())
+
+                # Prefix/substring/mismatch/traversal queries must return 2 and NOT initialize DB
+                for miss in (
+                    {"project_id": None, "run_id": "run_1"},
+                    {"project_id": "p_1", "run_id": None},
+                    {"project_id": "p_unknown", "run_id": None},
+                    {"project_id": "p_other", "run_id": "run_10"},
+                    {"project_id": None, "run_id": "../../outside"},
+                ):
+                    ns = argparse.Namespace(config=str(cfg_path), open=False, **miss)
+                    rc = cmd_report(ns)
+                    self.assertEqual(rc, 2, miss)
+
+                self.assertEqual(default_db.stat().st_size, size_before)
+                check_conn = sqlite3.connect(default_db)
+                try:
+                    tables = check_conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                    self.assertEqual(tables, [])
+                finally:
+                    check_conn.close()
 
     def test_web_load_report_binds_preview_and_download_to_same_run(self) -> None:
         node = shutil.which("node") or "/opt/homebrew/bin/node"

@@ -19,7 +19,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
 from . import __version__, TAGLINE
@@ -776,6 +776,54 @@ def _read_report_metadata(directory: Path) -> tuple[str, str]:
     return proj_id, run_id
 
 
+def _candidate_attribution_ok(
+    directory: Path,
+    runs_dir: Path,
+    *,
+    expected_project_id: str | None,
+    expected_run_id: str | None,
+    db_run_to_project: Mapping[str, str],
+) -> bool:
+    """Reject candidates with conflicting DB/directory/metadata attribution."""
+    meta_pid, meta_rid = _read_report_metadata(directory)
+    dir_pid = ""
+    dir_rid = ""
+    parent = directory.parent
+    if parent.parent == runs_dir:
+        dir_rid = directory.name
+        dir_pid = "" if parent.name.startswith("demo-") else parent.name
+    elif parent == runs_dir:
+        name = directory.name
+        if expected_run_id and name.endswith(f"-{expected_run_id}") and len(name) > len(expected_run_id) + 1:
+            dir_pid = name[:-(len(expected_run_id) + 1)]
+            dir_rid = expected_run_id
+        elif expected_project_id and name.startswith(f"{expected_project_id}-") and len(name) > len(expected_project_id) + 1:
+            dir_pid = expected_project_id
+            dir_rid = name[len(expected_project_id) + 1:]
+        elif expected_project_id and name == expected_project_id:
+            dir_pid = expected_project_id
+            dir_rid = ""
+        else:
+            dir_rid = name
+
+    if expected_run_id and meta_rid and meta_rid != expected_run_id:
+        return False
+    if meta_rid and dir_rid and meta_rid != dir_rid and directory.name != expected_project_id:
+        return False
+
+    db_pid = (
+        db_run_to_project.get(expected_run_id or "", "")
+        or db_run_to_project.get(meta_rid, "")
+        or db_run_to_project.get(dir_rid, "")
+    )
+    evidences = [p for p in (db_pid, dir_pid, meta_pid) if p]
+    if len(set(evidences)) > 1:
+        return False
+    if expected_project_id:
+        return bool(evidences) and set(evidences) == {expected_project_id}
+    return True
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     config = load_config(args)
     runs_dir = Path(config.runs_dir)
@@ -784,11 +832,21 @@ def cmd_report(args: argparse.Namespace) -> int:
         return 2
 
     db_path = Path(config.db_path)
+    db_all_runs = _read_runs_readonly(db_path, limit=1000)
+    db_run_to_project = {rid: pid for rid, pid, _ in db_all_runs if pid}
     candidates: list[Path] = []
     seen: set[str] = set()
 
     def add_candidate(path: Path) -> None:
         if not _within_runs_root(path, runs_dir):
+            return
+        if not _candidate_attribution_ok(
+            path,
+            runs_dir,
+            expected_project_id=args.project_id,
+            expected_run_id=args.run_id,
+            db_run_to_project=db_run_to_project,
+        ):
             return
         try:
             key = str(path.resolve())
@@ -803,34 +861,32 @@ def cmd_report(args: argparse.Namespace) -> int:
     if args.run_id:
         run_id = str(args.run_id)
         db_runs = _read_runs_readonly(db_path, run_id=run_id)
-        db_project_ids = {pid for _, pid, _ in db_runs if pid}
         if args.project_id:
-            if db_runs and args.project_id not in db_project_ids:
-                db_runs = []
             for rid, pid, _ in db_runs:
                 if pid == args.project_id:
                     add_candidate(runs_dir / rid)
                     add_candidate(runs_dir / pid / rid)
+                    add_candidate(runs_dir / f"{pid}-{rid}")
+            add_candidate(runs_dir / f"{args.project_id}-{run_id}")
+            add_candidate(runs_dir / args.project_id / run_id)
         else:
             for rid, pid, _ in db_runs:
                 add_candidate(runs_dir / rid)
                 if pid:
                     add_candidate(runs_dir / pid / rid)
+                    add_candidate(runs_dir / f"{pid}-{rid}")
             add_candidate(runs_dir / run_id)
 
         fs_matches: list[Path] = []
         for directory in report_dirs:
-            meta_pid, meta_rid = _read_report_metadata(directory)
-            if directory.name != run_id and meta_rid != run_id:
+            _, meta_rid = _read_report_metadata(directory)
+            is_flat_legacy = (
+                directory.parent == runs_dir
+                and directory.name.endswith(f"-{run_id}")
+                and len(directory.name) > len(run_id) + 1
+            )
+            if directory.name != run_id and meta_rid != run_id and not is_flat_legacy:
                 continue
-            if args.project_id:
-                provable = (
-                    args.project_id in db_project_ids
-                    or (directory.parent.parent == runs_dir and directory.parent.name == args.project_id)
-                    or meta_pid == args.project_id
-                )
-                if not provable:
-                    continue
             fs_matches.append(directory)
         fs_matches.sort(key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
         for directory in fs_matches:
@@ -839,10 +895,10 @@ def cmd_report(args: argparse.Namespace) -> int:
     elif args.project_id:
         project_id = str(args.project_id)
         db_runs = _read_runs_readonly(db_path, project_id=project_id)
-        db_run_ids = [rid for rid, _, _ in db_runs]
-        for rid in db_run_ids:
+        for rid, _, _ in db_runs:
             add_candidate(runs_dir / rid)
             add_candidate(runs_dir / project_id / rid)
+            add_candidate(runs_dir / f"{project_id}-{rid}")
             for directory in report_dirs:
                 if directory.name == rid:
                     add_candidate(directory)
@@ -852,18 +908,23 @@ def cmd_report(args: argparse.Namespace) -> int:
             meta_pid, _ = _read_report_metadata(directory)
             is_exact_proj_dir = directory.parent == runs_dir and directory.name == project_id
             is_under_proj_dir = directory.parent.parent == runs_dir and directory.parent.name == project_id
-            if is_exact_proj_dir or is_under_proj_dir or meta_pid == project_id:
+            is_flat_legacy = (
+                directory.parent == runs_dir
+                and directory.name.startswith(f"{project_id}-")
+                and len(directory.name) > len(project_id) + 1
+            )
+            if is_exact_proj_dir or is_under_proj_dir or is_flat_legacy or meta_pid == project_id:
                 fs_matches.append(directory)
         fs_matches.sort(key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
         for directory in fs_matches:
             add_candidate(directory)
 
     else:
-        db_runs = _read_runs_readonly(db_path)
-        for rid, pid, _ in db_runs:
+        for rid, pid, _ in db_all_runs:
             add_candidate(runs_dir / rid)
             if pid:
                 add_candidate(runs_dir / pid / rid)
+                add_candidate(runs_dir / f"{pid}-{rid}")
         fs_dirs = sorted(report_dirs, key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
         for directory in fs_dirs:
             add_candidate(directory)

@@ -156,6 +156,108 @@ class CliReportResolutionTests(unittest.TestCase):
                 finally:
                     check_conn.close()
 
+    def test_conflicting_attribution_rejected_and_legacy_flat_archive_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+            cfg = AriaXConfig(data_dir=str(data_dir), runs_dir=str(runs_dir))
+            store = Store(cfg.db_path)
+            try:
+                p_a = Project(id="p_A", name="Project A", goal="goal A")
+                p_b = Project(id="p_B", name="Project B", goal="goal B")
+                p_leg = Project(id="p_legacy", name="Legacy", goal="legacy goal")
+                store.create_project(p_a)
+                store.create_project(p_b)
+                store.create_project(p_leg)
+                store.create_run(Run(id="run_conflict", project_id="p_A", status="completed",
+                                     started_at="2026-11-01T00:00:00Z"))
+                store.create_run(Run(id="run_conflict2", project_id="p_A", status="completed",
+                                     started_at="2026-11-02T00:00:00Z"))
+                store.create_run(Run(id="run_legacy", project_id="p_legacy", status="completed",
+                                     started_at="2026-11-03T00:00:00Z"))
+            finally:
+                store.close()
+
+            # 1. DB -> p_A, metadata -> p_B (flat runs/run_conflict)
+            c1 = runs_dir / "run_conflict"
+            c1.mkdir()
+            (c1 / "report.html").write_text("<html>B report</html>", encoding="utf-8")
+            (c1 / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_B"}, "meta": {"run_id": "run_conflict"}}),
+                encoding="utf-8",
+            )
+
+            # 2. DB -> p_A, directory -> runs/p_B/run_conflict2
+            c2 = runs_dir / "p_B" / "run_conflict2"
+            c2.mkdir(parents=True)
+            (c2 / "report.html").write_text("<html>dir B</html>", encoding="utf-8")
+
+            # 3. Directory -> runs/p_B/run_conflict3, metadata -> p_A
+            c3 = runs_dir / "p_B" / "run_conflict3"
+            c3.mkdir(parents=True)
+            (c3 / "report.html").write_text("<html>dir B meta A</html>", encoding="utf-8")
+            (c3 / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_A"}, "meta": {"run_id": "run_conflict3"}}),
+                encoding="utf-8",
+            )
+
+            # 4. Valid legacy flat archive: runs/p_legacy-run_legacy/
+            leg_dir = runs_dir / "p_legacy-run_legacy"
+            leg_dir.mkdir()
+            leg_rep = leg_dir / "report.html"
+            leg_rep.write_text("<html>legacy</html>", encoding="utf-8")
+
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                                encoding="utf-8")
+
+            for miss in (
+                {"project_id": "p_A", "run_id": "run_conflict"},
+                {"project_id": "p_A", "run_id": None},
+                {"project_id": None, "run_id": "run_conflict"},
+                {"project_id": "p_A", "run_id": "run_conflict2"},
+                {"project_id": None, "run_id": "run_conflict2"},
+                {"project_id": "p_B", "run_id": "run_conflict3"},
+                {"project_id": None, "run_id": "run_conflict3"},
+                {"project_id": None, "run_id": "run_leg"},
+                {"project_id": "p_leg", "run_id": None},
+            ):
+                rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **miss))
+                self.assertEqual(rc, 2, f"expected 2 for {miss}")
+
+            for hit in (
+                {"project_id": None, "run_id": "run_legacy"},
+                {"project_id": "p_legacy", "run_id": None},
+                {"project_id": "p_legacy", "run_id": "run_legacy"},
+            ):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
+                self.assertEqual(rc, 0, hit)
+                self.assertEqual(Path(buf.getvalue().strip()).resolve(), leg_rep.resolve())
+
+            # Legacy flat archive also works without DB (both with and without findings.json)
+            cfg.db_path.unlink()
+            for with_meta in (False, True):
+                if with_meta:
+                    (leg_dir / "findings.json").write_text(
+                        json.dumps({"project": {"id": "p_legacy"}, "meta": {"run_id": "run_legacy"}}),
+                        encoding="utf-8",
+                    )
+                for hit in (
+                    {"project_id": None, "run_id": "run_legacy"},
+                    {"project_id": "p_legacy", "run_id": None},
+                    {"project_id": "p_legacy", "run_id": "run_legacy"},
+                ):
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
+                    self.assertEqual(rc, 0, (with_meta, hit))
+                    self.assertEqual(Path(buf.getvalue().strip()).resolve(), leg_rep.resolve())
+
     def test_web_load_report_binds_preview_and_download_to_same_run(self) -> None:
         node = shutil.which("node") or "/opt/homebrew/bin/node"
         if not Path(node).exists():

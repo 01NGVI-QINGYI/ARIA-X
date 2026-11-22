@@ -24,6 +24,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .. import __version__
 from ..models import SEVERITIES, SEVERITY_RANK
 from ..util import json_dumps, truncate
+from .i18n import get_report_strings, resolve_report_language
 
 _MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _MD_CODE = re.compile(r"`([^`]+)`")
@@ -132,29 +133,31 @@ def _project(export: Mapping[str, Any]) -> dict[str, Any]:
     return dict(project) if isinstance(project, Mapping) else {}
 
 
-def _scope_lines(export: Mapping[str, Any], meta: Mapping[str, Any]) -> list[str]:
+def _scope_lines(
+    export: Mapping[str, Any],
+    meta: Mapping[str, Any],
+    strings: Mapping[str, str],
+) -> list[str]:
     project = _project(export)
     scope = project.get("scope") if isinstance(project.get("scope"), Mapping) else {}
     targets = _as_list(scope.get("targets")) or _as_list(meta.get("targets"))
     deny = _as_list(scope.get("deny"))
     lines: list[str] = []
     if targets:
-        lines.append("Authorized targets:")
+        lines.append(strings["scope_authorized_targets"])
         lines.extend(f"- `{target}`" for target in targets)
     else:
-        lines.append("No explicit target list was recorded in the project scope.")
+        lines.append(strings["scope_no_targets"])
     if deny:
         lines.append("")
-        lines.append("Excluded targets:")
+        lines.append(strings["scope_excluded_targets"])
         lines.extend(f"- `{target}`" for target in deny)
     notes = _meta_text(meta, "scope_notes") or _meta_text(scope, "notes")
     if notes:
         lines.append("")
         lines.append(notes)
     lines.append("")
-    lines.append("Authorization: this engagement was executed only against explicitly authorized "
-                 "assets; every out-of-scope action was refused by the scope engine and appears in "
-                 "the audit appendix.")
+    lines.append(strings["scope_authorization"])
     return lines
 
 
@@ -163,108 +166,121 @@ def _scope_lines(export: Mapping[str, Any], meta: Mapping[str, Any]) -> list[str
 # ---------------------------------------------------------------------------
 
 
-def render_markdown(export: Mapping[str, Any], *, meta: Mapping[str, Any] | None = None) -> str:
+def render_markdown(
+    export: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any] | None = None,
+    language: str | None = None,
+) -> str:
     """Render a professional Markdown report from a project export."""
     meta = dict(meta or {})
+    strings = get_report_strings(language, meta)
     project = _project(export)
     counts = _counts(export)
     findings = _findings(export)
     assets = [a for a in _as_list(export.get("assets")) if isinstance(a, dict)]
     nodes_by_id = _nodes_by_id(export)
-    title = _meta_text(meta, "title") or f"Security Assessment Report — {project.get('name', 'Engagement')}"
+    title = _meta_text(meta, "title") or strings["default_title"].format(
+        project=project.get("name", strings["default_project"])
+    )
     out: list[str] = []
 
     out.append(f"# {title}")
     out.append("")
-    out.append("| Field | Value |")
+    out.append(f"| {strings['meta_col_field']} | {strings['meta_col_value']} |")
     out.append("| --- | --- |")
     for label, value in (
-        ("Engagement", project.get("name", "—")),
-        ("Project ID", project.get("id", "—")),
-        ("Run ID", _meta_text(meta, "run_id", "—")),
-        ("Generated", _generated_at(meta)),
-        ("Operator", _meta_text(meta, "operator", "ARIA-X autonomous engine")),
-        ("Classification", _meta_text(meta, "classification", "Confidential — authorized testing only")),
+        (strings["meta_engagement"], project.get("name", "—")),
+        (strings["meta_project_id"], project.get("id", "—")),
+        (strings["meta_run_id"], _meta_text(meta, "run_id", "—")),
+        (strings["meta_generated"], _generated_at(meta)),
+        (strings["meta_operator"], _meta_text(meta, "operator", strings["default_operator"])),
+        (strings["meta_classification"], _meta_text(meta, "classification", strings["default_classification"])),
     ):
         out.append(f"| {_md_cell(label)} | {_md_cell(value)} |")
     out.append("")
 
     # 1. Executive summary -------------------------------------------------
-    out.append("## 1. Executive Summary")
+    out.append(strings["sec_1"])
     out.append("")
     summary = _meta_text(meta, "summary")
     if summary:
         out.append(summary.strip())
         out.append("")
-    out.append(f"This engagement pursued the goal **{_plain(project.get('goal', '—'), 600)}**. "
-               f"The autonomous loop recorded {counts['nodes'].get('fact', 0)} verified facts, "
-               f"{counts['nodes'].get('intent', 0)} explored intents and "
-               f"{counts['total_findings']} findings across {counts['total_assets']} distinct assets. "
-               f"Actionable issues by severity: "
-               + ", ".join(f"{severity} {counts['findings'].get(severity, 0)}" for severity in SEVERITIES)
-               + ".")
+    severity_summary = ", ".join(f"{severity} {counts['findings'].get(severity, 0)}" for severity in SEVERITIES)
+    out.append(strings["exec_summary_body"].format(
+        goal=_plain(project.get("goal", "—"), 600),
+        facts=counts["nodes"].get("fact", 0),
+        intents=counts["nodes"].get("intent", 0),
+        total_findings=counts["total_findings"],
+        total_assets=counts["total_assets"],
+        severity_summary=severity_summary,
+    ))
     out.append("")
     if findings:
         top = findings[0]
-        out.append(f"The highest-severity issue is **{_plain(top.get('title'), 300)}** "
-                   f"({_severity(top).upper()}).")
+        out.append(strings["exec_top_finding"].format(
+            title=_plain(top.get("title"), 300),
+            severity=_severity(top).upper(),
+        ))
     else:
-        out.append("No confirmed security findings were recorded. Negative results and the "
-                   "coverage boundary are documented in §7.")
+        out.append(strings["exec_no_findings"])
     out.append("")
 
     # 2. Scope -------------------------------------------------------------
-    out.append("## 2. Engagement Scope & Authorization")
+    out.append(strings["sec_2"])
     out.append("")
-    out.extend(_scope_lines(export, meta))
+    out.extend(_scope_lines(export, meta, strings))
     out.append("")
 
     # 3. Methodology -------------------------------------------------------
-    out.append("## 3. Methodology")
+    out.append(strings["sec_3"])
     out.append("")
-    out.append("ARIA-X runs a blackboard-driven OODA loop: a planner emits bounded intents, workers "
-               "execute them through scoped tools inside an isolated sandbox, and every observation "
-               "is written back as a fact, asset or finding. The shared asset graph and todo chain "
-               "persist across workers, so each probe builds on the previous one instead of "
-               "restarting. Network access is authorized per request, rate-limited per host and "
-               "recorded as evidence.")
+    out.append(strings["methodology_body"])
     out.append("")
-    out.append(f"Execution footprint: {counts['traces']} process traces, {counts['edges']} graph "
-               f"edges, {counts['todos']} plan items. "
-               + _meta_text(meta, "methodology_notes", "").strip())
+    footprint = strings["methodology_footprint"].format(
+        traces=counts["traces"],
+        edges=counts["edges"],
+        todos=counts["todos"],
+    )
+    extra_notes = _meta_text(meta, "methodology_notes", "").strip()
+    out.append(f"{footprint} {extra_notes}" if extra_notes else f"{footprint} ")
     out.append("")
 
     # 4. Findings ----------------------------------------------------------
-    out.append("## 4. Findings")
+    out.append(strings["sec_4"])
     out.append("")
     if not findings:
-        out.append("_No findings were confirmed during this engagement._")
+        out.append(strings["findings_none"])
         out.append("")
     for index, finding in enumerate(findings, start=1):
         severity = _severity(finding)
         meta_data = finding.get("meta") or {}
         out.append(f"### 4.{index} {_plain(finding.get('title'), 300)}")
         out.append("")
-        out.append("| Attribute | Value |")
+        out.append(f"| {strings['finding_col_attr']} | {strings['finding_col_val']} |")
         out.append("| --- | --- |")
-        out.append(f"| Severity | **{severity.upper()}** |")
+        out.append(f"| {strings['finding_attr_severity']} | **{severity.upper()}** |")
         if meta_data.get("cvss") is not None:
-            out.append(f"| CVSS | {_md_cell(meta_data.get('cvss'))} |")
-        out.append(f"| Confidence | {_md_cell(meta_data.get('confidence', 'medium'))} |")
-        out.append(f"| Finding ID | `{_md_cell(finding.get('id'), 60)}` |")
+            out.append(f"| {strings['finding_attr_cvss']} | {_md_cell(meta_data.get('cvss'))} |")
+        out.append(f"| {strings['finding_attr_confidence']} | {_md_cell(meta_data.get('confidence', 'medium'))} |")
+        out.append(f"| {strings['finding_attr_id']} | `{_md_cell(finding.get('id'), 60)}` |")
         if finding.get("parent_id"):
             parent = nodes_by_id.get(str(finding.get("parent_id")))
             label = _plain(parent.get("title"), 200) if parent else str(finding.get("parent_id"))
-            out.append(f"| Proven by intent | {_md_cell(label)} |")
+            out.append(f"| {strings['finding_attr_intent']} | {_md_cell(label)} |")
         out.append("")
         body = _plain(finding.get("body"), 8000)
-        out.append(body if body else "_No detail recorded._")
+        out.append(body if body else strings["finding_no_detail"])
         out.append("")
         evidence = _evidence_for(export, str(finding.get("id")))
         if evidence:
-            out.append("**Evidence**")
+            out.append(strings["finding_evidence_heading"])
             out.append("")
-            out.append("| Kind | Reference | SHA-256 | Excerpt |")
+            out.append(
+                f"| {strings['ev_col_kind']} | {strings['ev_col_ref']} "
+                f"| {strings['ev_col_sha256']} | {strings['ev_col_excerpt']} |"
+            )
             out.append("| --- | --- | --- | --- |")
             for item in evidence:
                 digest = str(item.get("sha256") or "")
@@ -274,16 +290,19 @@ def render_markdown(export: Mapping[str, Any], *, meta: Mapping[str, Any] | None
             out.append("")
 
     # 5. Attack path -------------------------------------------------------
-    out.append("## 5. Attack Path Narrative")
+    out.append(strings["sec_5"])
     out.append("")
-    out.extend(_attack_path(export, nodes_by_id))
+    out.extend(_attack_path(export, nodes_by_id, strings))
     out.append("")
 
     # 6. Assets ------------------------------------------------------------
-    out.append("## 6. Asset Inventory")
+    out.append(strings["sec_6"])
     out.append("")
     if assets:
-        out.append("| Value | Kind | Parent | First seen |")
+        out.append(
+            f"| {strings['asset_col_value']} | {strings['asset_col_kind']} "
+            f"| {strings['asset_col_parent']} | {strings['asset_col_first_seen']} |"
+        )
         out.append("| --- | --- | --- | --- |")
         for asset in assets:
             parent = nodes_by_id.get(str(asset.get("parent_id")))
@@ -291,41 +310,40 @@ def render_markdown(export: Mapping[str, Any], *, meta: Mapping[str, Any] | None
             out.append(f"| `{_md_cell(asset.get('value'), 200)}` | {_md_cell(asset.get('kind'))} "
                        f"| {_md_cell(parent_label)} | {_md_cell(asset.get('first_seen'))} |")
     else:
-        out.append("_No assets were recorded._")
+        out.append(strings["assets_none"])
     out.append("")
 
     # 7. Coverage ----------------------------------------------------------
-    out.append("## 7. Coverage & Limitations")
+    out.append(strings["sec_7"])
     out.append("")
     open_intents = [n for n in _nodes(export, "intent") if n.get("status") in {"open", "active"}]
     audit = [a for a in _as_list(export.get("audit")) if isinstance(a, dict)]
     denied = [a for a in audit if str(a.get("decision")).lower() == "denied"]
-    out.append(f"- Verified facts: {counts['nodes'].get('fact', 0)}")
-    out.append(f"- Intents explored: {counts['nodes'].get('intent', 0)} "
-               f"({len(open_intents)} still open)")
-    out.append(f"- Assets discovered: {counts['total_assets']}")
+    out.append(strings["cov_facts"].format(count=counts["nodes"].get("fact", 0)))
+    out.append(strings["cov_intents"].format(count=counts["nodes"].get("intent", 0), open_count=len(open_intents)))
+    out.append(strings["cov_assets"].format(count=counts["total_assets"]))
     severity_breakdown = ", ".join(
         f"{sev}={counts['findings'].get(sev, 0)}" for sev in SEVERITIES)
-    out.append(f"- Findings: {counts['total_findings']} ({severity_breakdown})")
-    out.append(f"- Out-of-scope or policy-refused actions: {len(denied)} (audited, not executed)")
+    out.append(strings["cov_findings"].format(count=counts["total_findings"], breakdown=severity_breakdown))
+    out.append(strings["cov_denied"].format(count=len(denied)))
     out.append("")
-    out.append("Limitations: the assessment reflects the tool results recorded above as of the "
-               "generation timestamp. Any service that was unavailable, rate-limited or outside "
-               "the authorized scope is not covered. Absence of a finding is not proof of absence "
-               "of a vulnerability; open intents mark the remaining uncertainty.")
+    out.append(strings["cov_limitations"])
     out.append("")
 
     # 8. Appendix ----------------------------------------------------------
-    out.append("## 8. Appendix")
+    out.append(strings["sec_8"])
     out.append("")
-    out.append("### 8.1 Evidence index")
+    out.append(strings["sec_8_1"])
     out.append("")
     all_evidence: list[dict[str, Any]] = []
     for finding in findings:
         for item in _evidence_for(export, str(finding.get("id"))):
             all_evidence.append({"finding": finding.get("title"), **item})
     if all_evidence:
-        out.append("| Finding | Kind | Reference | SHA-256 |")
+        out.append(
+            f"| {strings['app_ev_col_finding']} | {strings['app_ev_col_kind']} "
+            f"| {strings['app_ev_col_ref']} | {strings['app_ev_col_sha256']} |"
+        )
         out.append("| --- | --- | --- | --- |")
         for item in all_evidence[:200]:
             digest = str(item.get("sha256") or "")
@@ -333,58 +351,73 @@ def render_markdown(export: Mapping[str, Any], *, meta: Mapping[str, Any] | None
                        f"| {_md_cell(item.get('path') or item.get('url'))} "
                        f"| `{_md_cell(digest[:16] if digest else '—', 20)}` |")
     else:
-        out.append("_No evidence records were attached to findings._")
+        out.append(strings["app_ev_none"])
     out.append("")
 
-    out.append("### 8.2 Plan state")
+    out.append(strings["sec_8_2"])
     out.append("")
     todos = [t for t in _as_list(export.get("todos")) if isinstance(t, dict)]
     if todos:
-        out.append("| # | Status | Title |")
+        out.append(
+            f"| {strings['app_todo_col_pos']} | {strings['app_todo_col_status']} "
+            f"| {strings['app_todo_col_title']} |"
+        )
         out.append("| --- | --- | --- |")
         for todo in todos[:100]:
             out.append(f"| {_md_cell(todo.get('position'))} | {_md_cell(todo.get('status'))} "
                        f"| {_md_cell(todo.get('title'), 240)} |")
     else:
-        out.append("_No todo chain was recorded._")
+        out.append(strings["app_todo_none"])
     out.append("")
 
-    out.append("### 8.3 Process trace (recent)")
+    out.append(strings["sec_8_3"])
     out.append("")
     traces = [t for t in _as_list(export.get("traces")) if isinstance(t, dict)]
     if traces:
-        out.append("| Task | Agent | Kind | Tool | Content |")
+        out.append(
+            f"| {strings['app_trace_col_task']} | {strings['app_trace_col_agent']} "
+            f"| {strings['app_trace_col_kind']} | {strings['app_trace_col_tool']} "
+            f"| {strings['app_trace_col_content']} |"
+        )
         out.append("| --- | --- | --- | --- | --- |")
         for trace in traces[-30:]:
             out.append(f"| {_md_cell(trace.get('task_id'), 40)} | {_md_cell(trace.get('agent'))} "
                        f"| {_md_cell(trace.get('kind'))} | {_md_cell(trace.get('tool_name'))} "
                        f"| {_md_cell(trace.get('content'), 200)} |")
     else:
-        out.append("_No traces were recorded._")
+        out.append(strings["app_trace_none"])
     out.append("")
 
-    out.append("### 8.4 Audit (recent decisions)")
+    out.append(strings["sec_8_4"])
     out.append("")
     if audit:
-        out.append("| Time | Actor | Action | Decision | Target |")
+        out.append(
+            f"| {strings['app_audit_col_time']} | {strings['app_audit_col_actor']} "
+            f"| {strings['app_audit_col_action']} | {strings['app_audit_col_decision']} "
+            f"| {strings['app_audit_col_target']} |"
+        )
         out.append("| --- | --- | --- | --- | --- |")
         for entry in list(reversed(audit))[-40:]:
             out.append(f"| {_md_cell(entry.get('ts'))} | {_md_cell(entry.get('actor'))} "
                        f"| {_md_cell(entry.get('action'))} | {_md_cell(entry.get('decision'))} "
                        f"| {_md_cell(entry.get('target'), 200)} |")
     else:
-        out.append("_No audit entries were recorded._")
+        out.append(strings["app_audit_none"])
     out.append("")
     out.append("---")
     out.append("")
-    out.append(f"_Generated by ARIA-X {_meta_text(meta, 'version', 'v0.1')} — "
-               f"{_generated_at(meta)}. This report is an audit artifact; evidence files are stored "
-               f"alongside it._")
+    raw_ver = _meta_text(meta, "version", __version__)
+    ver_label = raw_ver if raw_ver.startswith("v") else f"v{raw_ver}"
+    out.append(strings["md_footer"].format(version=ver_label, generated_at=_generated_at(meta)))
     out.append("")
     return "\n".join(out)
 
 
-def _attack_path(export: Mapping[str, Any], nodes_by_id: Mapping[str, dict[str, Any]]) -> list[str]:
+def _attack_path(
+    export: Mapping[str, Any],
+    nodes_by_id: Mapping[str, dict[str, Any]],
+    strings: Mapping[str, str],
+) -> list[str]:
     edges = [e for e in _as_list(export.get("edges")) if isinstance(e, dict)]
     outgoing: dict[str, list[dict[str, Any]]] = {}
     for edge in edges:
@@ -397,11 +430,10 @@ def _attack_path(export: Mapping[str, Any], nodes_by_id: Mapping[str, dict[str, 
     intents = [n for n in _nodes(export, "intent")]
     intents.sort(key=lambda n: int(n.get("seq") or 0))
     if not intents and not edges:
-        return ["No attack path was recorded: the engagement produced neither intents nor lineage edges."]
+        return [strings["attack_none"]]
     lines: list[str] = []
     if intents:
-        lines.append("Each item below is one decision point: the intent, what it observed and what it "
-                     "proved. Lineage is taken directly from graph edges.")
+        lines.append(strings["attack_intro"])
         lines.append("")
         for index, intent in enumerate(intents, start=1):
             intent_id = str(intent.get("id"))
@@ -409,19 +441,25 @@ def _attack_path(export: Mapping[str, Any], nodes_by_id: Mapping[str, dict[str, 
             targets = [nodes_by_id.get(str(e.get("dst_id")), {}) for e in produced]
             titles = [_plain(item.get("title"), 140) for item in targets if item.get("title")]
             finding_titles = [_plain(f.get("title"), 160) for f in findings_by_intent.get(intent_id, [])]
-            line = f"{index}. **{_plain(intent.get('title'), 240)}** — status: {intent.get('status', 'open')}."
+            line = strings["attack_intent_line"].format(
+                index=index,
+                title=_plain(intent.get("title"), 240),
+                status=intent.get("status", "open"),
+            )
             lines.append(line)
             if titles:
-                lines.append("   - Observed: " + "; ".join(titles[:5]) + (" …" if len(titles) > 5 else ""))
+                lines.append(strings["attack_observed"].format(
+                    items="; ".join(titles[:5]) + (" …" if len(titles) > 5 else "")
+                ))
             if finding_titles:
-                lines.append("   - Findings: " + "; ".join(finding_titles[:5]))
+                lines.append(strings["attack_findings"].format(items="; ".join(finding_titles[:5])))
             if not produced and not finding_titles:
-                lines.append("   - No downstream node recorded (negative or incomplete exploration).")
+                lines.append(strings["attack_no_downstream"])
         lines.append("")
     # Derived-from / contradicts relationships between facts and findings.
     interesting = [e for e in edges if e.get("rel") in {"derived_from", "supports", "contradicts"}]
     if interesting:
-        lines.append("Cross-links recorded during analysis:")
+        lines.append(strings["attack_cross_links"])
         lines.append("")
         for edge in interesting[:20]:
             src = nodes_by_id.get(str(edge.get("src_id")), {})
@@ -587,7 +625,7 @@ _CSS = """
 :root{color-scheme:dark}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
-body{background:#0b0f14;color:#dbe4ee;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+body{background:#0b0f14;color:#dbe4ee;font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans","Yu Gothic UI","Noto Sans CJK SC","Noto Sans JP","Microsoft YaHei",sans-serif;}
 a{color:#6cb6ff;text-decoration:none}
 a:hover{text-decoration:underline}
 .hero{background:linear-gradient(135deg,#111a24 0%,#0d141d 55%,#101d2b 100%);border-bottom:1px solid #1f2c3a;padding:42px 28px 30px}
@@ -624,27 +662,40 @@ footer{border-top:1px solid #1e2c3b;color:#72869a;font-size:12px;padding:20px 28
 """
 
 
-def render_html(markdown: str, export: Mapping[str, Any], meta: Mapping[str, Any] | None = None) -> str:
+def render_html(
+    markdown: str,
+    export: Mapping[str, Any],
+    meta: Mapping[str, Any] | None = None,
+    *,
+    language: str | None = None,
+) -> str:
     """Wrap rendered Markdown in a self-contained, escaped dark HTML document."""
     meta = dict(meta or {})
+    lang = resolve_report_language(language, meta)
+    strings = get_report_strings(language, meta)
     project = _project(export)
     counts = _counts(export)
-    title = _meta_text(meta, "title") or f"Security Assessment Report — {project.get('name', 'Engagement')}"
+    title = _meta_text(meta, "title") or strings["default_title"].format(
+        project=project.get("name", strings["default_project"])
+    )
     stats = "".join(
         f'<div class="stat {severity}"><div class="value">{counts["findings"].get(severity, 0)}</div>'
-        f'<div class="label">{severity}</div></div>'
+        f'<div class="label">{_escape(strings[f"html_stat_sev_{severity}"])}</div></div>'
         for severity in SEVERITIES
     )
     stats += (f'<div class="stat"><div class="value">{counts["total_assets"]}</div>'
-              f'<div class="label">assets</div></div>'
+              f'<div class="label">{_escape(strings["html_stat_assets"])}</div></div>'
               f'<div class="stat"><div class="value">{counts["nodes"].get("fact", 0)}</div>'
-              f'<div class="label">facts</div></div>')
+              f'<div class="label">{_escape(strings["html_stat_facts"])}</div></div>')
     body = markdown_to_html(markdown)
     raw_ver = _meta_text(meta, "version", __version__)
     ver_label = raw_ver if raw_ver.startswith("v") else f"v{raw_ver}"
+    run_id = _meta_text(meta, "run_id")
+    run_part = f' · {_escape(strings["html_meta_run"].format(run_id=run_id))}' if run_id else ""
+    gen_part = _escape(strings["html_meta_generated"].format(generated_at=_generated_at(meta)))
     return "\n".join([
         "<!DOCTYPE html>",
-        f'<html lang="{_escape(meta.get("lang", "en"))}">',
+        f'<html lang="{_escape(lang)}">',
         "<head>",
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
@@ -654,16 +705,15 @@ def render_html(markdown: str, export: Mapping[str, Any], meta: Mapping[str, Any
         "</head>",
         "<body>",
         '<header class="hero"><div class="inner">',
-        '<div class="eyebrow">ARIA-X · Authorized Security Assessment</div>',
+        f'<div class="eyebrow">{_escape(strings["html_eyebrow"])}</div>',
         f"<h1>{_escape(title)}</h1>",
         f'<p class="meta">{_escape(project.get("name", ""))}'
-        f'{(" · run " + _escape(_meta_text(meta, "run_id"))) if _meta_text(meta, "run_id") else ""}'
-        f' · generated {_escape(_generated_at(meta))}</p>',
+        f'{run_part}'
+        f' · {gen_part}</p>',
         f'<div class="stats">{stats}</div>',
         "</div></header>",
         f'<main class="report">{body}</main>',
-        f"<footer>Generated by ARIA-X {_escape(ver_label)} · "
-        f"AGPL-3.0-or-later · confidential</footer>",
+        f'<footer>{_escape(strings["html_footer"].format(version=ver_label))}</footer>',
         "</body>",
         "</html>",
     ])
@@ -686,14 +736,19 @@ def _findings_payload(export: Mapping[str, Any], meta: Mapping[str, Any]) -> dic
             "counts": _counts(export), "findings": findings}
 
 
-def write_report(run_dir: str | Path, export: Mapping[str, Any],
-                 meta: Mapping[str, Any] | None = None) -> dict[str, str]:
+def write_report(
+    run_dir: str | Path,
+    export: Mapping[str, Any],
+    meta: Mapping[str, Any] | None = None,
+    *,
+    language: str | None = None,
+) -> dict[str, str]:
     """Write ``report.md``, ``report.html`` and ``findings.json`` under *run_dir*."""
     meta = dict(meta or {})
     directory = Path(run_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    markdown = render_markdown(export, meta=meta)
-    html_text = render_html(markdown, export, meta)
+    markdown = render_markdown(export, meta=meta, language=language)
+    html_text = render_html(markdown, export, meta, language=language)
     payload = _findings_payload(export, meta)
     markdown_path = directory / "report.md"
     html_path = directory / "report.html"

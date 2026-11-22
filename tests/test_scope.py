@@ -74,6 +74,8 @@ class ScopeAuthorizationTests(unittest.TestCase):
             "http://127.0.0.1:8080/api/%2e%2e/admin",
             "http://127.0.0.1:8080/api/%2E%2E%2Fadmin",
             "http://127.0.0.1:8080/api/%252e%252e/admin",
+            "http://127.0.0.1:8080/api/%25252525252e%25252525252e/admin",
+            "http://127.0.0.1:8080/api/%252525252520",
             "http://127.0.0.1:8080/api/%5c..%5cadmin",
             "http://127.0.0.1:8080/api/..;/admin",
             "http://127.0.0.1:8080/api;foo/bar",
@@ -85,6 +87,10 @@ class ScopeAuthorizationTests(unittest.TestCase):
         ):
             decision = scope.authorize_url(blocked)
             self.assertFalse(decision.allowed, f"expected blocked: {blocked}")
+
+        over_limit = scope.authorize_url("http://127.0.0.1:8080/api/%252525252520")
+        self.assertFalse(over_limit.allowed)
+        self.assertIn("exceeds percent-decoding limit", over_limit.reason)
 
     def test_allow_public_targets_false_fails_closed_on_unresolved_and_mixed_hosts(self):
         scope = Scope(

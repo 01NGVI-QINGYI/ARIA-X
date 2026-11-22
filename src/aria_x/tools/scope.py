@@ -102,6 +102,8 @@ def _validate_scoped_path(raw_path: str) -> tuple[bool, str, str]:
         if nxt == cur:
             break
         cur = nxt
+    else:
+        return False, "", "URL path exceeds percent-decoding limit"
 
     normalized = path.rstrip("/") or "/"
     return True, normalized, ""

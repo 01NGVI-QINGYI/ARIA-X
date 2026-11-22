@@ -202,9 +202,10 @@ class ToolTestCase(unittest.TestCase):
             authorized=True, targets=[f"{self.base}/api"], allow_loopback=True, max_rps=1000.0,
         )))
         with mock.patch("aria_x.tools.net.urllib.request.build_opener") as opener_mock:
-            res = self.registry.execute("http_request", {"url": f"{self.base}/api/%2e%2e/admin"}, ctx_prefix)
-            self.assertFalse(res.ok)
-            self.assertIn("scope", res.error)
+            for path in ("/api/%2e%2e/admin", "/api/%25252525252e%25252525252e/admin", "/api/%252525252520"):
+                res = self.registry.execute("http_request", {"url": f"{self.base}{path}"}, ctx_prefix)
+                self.assertFalse(res.ok)
+                self.assertIn("scope", res.error)
             opener_mock.assert_not_called()
 
         # 2. Unresolved host with allow_public_targets=False must fail BEFORE build_opener
@@ -222,7 +223,12 @@ class ToolTestCase(unittest.TestCase):
         # 3. Hop-by-hop redirect handler blocks encoded traversal and out-of-prefix redirects
         handler = _ScopedRedirectHandler(ctx_prefix, [])
         req = urllib.request.Request(f"{self.base}/api/start")
-        for loc in (f"{self.base}/api/%2e%2e/admin", "/admin"):
+        for loc in (
+            f"{self.base}/api/%2e%2e/admin",
+            f"{self.base}/api/%25252525252e%25252525252e/admin",
+            f"{self.base}/api/%252525252520",
+            "/admin",
+        ):
             with self.assertRaises(ScopeViolation):
                 handler.redirect_request(req, None, 302, "Found", {}, loc)
 

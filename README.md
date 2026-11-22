@@ -225,8 +225,8 @@ export ARIA_X_API_KEY="your-api-key"
 ./aria-x projects                               # 查看项目列表
 ./aria-x graph                                  # 查看最新项目的黑板与状态图摘要
 ./aria-x report                                 # 打印最新报告路径（加 --open 可直接打开）
-./aria-x report <run_id>                        # 按运行 ID 精确查询报告路径
-./aria-x report --project-id <project_id>       # 按项目 ID 查询最新报告路径
+./aria-x report "$RUN_ID"                       # 先填入实际 RUN_ID，再按运行 ID 精确查询报告路径
+./aria-x report --project-id "$PROJECT_ID"      # 先填入实际 PROJECT_ID，再按项目 ID 查询最新报告路径
 ./aria-x export -o out.json                     # 导出完整项目图谱与证据 JSON
 ```
 

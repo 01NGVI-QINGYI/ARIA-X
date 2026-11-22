@@ -120,8 +120,9 @@ export ARIA_X_API_KEY="your-api-key"
 ./aria-x projects
 ./aria-x graph
 ./aria-x report
-./aria-x report <run_id>
-./aria-x report --project-id <project_id>
+# 実際の RUN_ID / PROJECT_ID を設定してから実行
+./aria-x report "$RUN_ID"
+./aria-x report --project-id "$PROJECT_ID"
 ./aria-x export -o out.json
 
 # Web コンソール

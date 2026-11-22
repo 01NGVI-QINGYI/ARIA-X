@@ -321,12 +321,10 @@ def _has_nonempty_auth_header(headers: Mapping[str, Any] | None) -> bool:
             return True
         if lk == "authorization" and bool(val):
             low = val.lower()
-            if low == "bearer" or low.startswith(("bearer ", "bearer\t")):
+            if low.startswith(("bearer ", "bearer\t")):
                 parts = val.split(None, 1)
                 if len(parts) == 2 and bool(parts[1].strip()):
                     return True
-            else:
-                return True
     return False
 
 

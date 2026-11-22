@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from aria_x import __version__
 from aria_x.models import Evidence, Node, Project, Todo, Trace
+from aria_x.report.i18n import REPORT_STRINGS, normalize_report_language, resolve_report_language
 from aria_x.report.render import markdown_to_html, render_html, render_markdown, write_report
 from aria_x.store import Store
 from aria_x.util import new_id
@@ -173,6 +175,102 @@ class ReportWriteTests(unittest.TestCase):
         self.assertIn("_No findings were confirmed during this engagement._", markdown)
         html_text = render_html(markdown, export, {"run_id": "r0"})
         self.assertIn("<!DOCTYPE html>", html_text)
+
+
+class ReportTrilingualTests(unittest.TestCase):
+    def test_dictionary_key_and_placeholder_parity(self) -> None:
+        import re
+        en_keys = set(REPORT_STRINGS["en"])
+        for lang in ("zh-CN", "ja"):
+            self.assertEqual(set(REPORT_STRINGS[lang]), en_keys, f"key mismatch for {lang}")
+            for key in en_keys:
+                en_ph = sorted(re.findall(r"\{([a-zA-Z0-9_]+)\}", REPORT_STRINGS["en"][key]))
+                loc_ph = sorted(re.findall(r"\{([a-zA-Z0-9_]+)\}", REPORT_STRINGS[lang][key]))
+                self.assertEqual(loc_ph, en_ph, f"placeholder mismatch for {lang}.{key}")
+
+    def test_language_resolution_and_option_a_default(self) -> None:
+        self.assertEqual(normalize_report_language("zh"), "zh-CN")
+        self.assertEqual(normalize_report_language("zh_CN"), "zh-CN")
+        self.assertEqual(normalize_report_language("ja-JP"), "ja")
+        self.assertEqual(normalize_report_language("en-US"), "en")
+        self.assertEqual(normalize_report_language("fr"), "en")
+
+        # Option A: meta["language"] == "zh" MUST NOT switch report language away from English
+        self.assertEqual(resolve_report_language(None, {"language": "zh"}), "en")
+        self.assertEqual(resolve_report_language(None, {"language": "zh", "lang": "ja"}), "ja")
+        self.assertEqual(resolve_report_language(None, {"lang": "ja", "report_language": "zh-CN"}), "zh-CN")
+        self.assertEqual(resolve_report_language("ja", {"report_language": "zh-CN", "lang": "en"}), "ja")
+
+    def test_option_a_meta_language_zh_keeps_english_headings_and_html_lang(self) -> None:
+        export = build_export()
+        meta = {"run_id": "r_opt_a", "language": "zh", "generated_at": "2026-01-02T03:04:05Z"}
+        md = render_markdown(export, meta=meta)
+        html_text = render_html(md, export, meta)
+        self.assertIn("## 1. Executive Summary", md)
+        self.assertIn("## 4. Findings", md)
+        self.assertIn('<html lang="en">', html_text)
+        expected_ver = f"v{__version__}" if not __version__.startswith("v") else __version__
+        self.assertIn(expected_ver, md)
+        self.assertIn(expected_ver, html_text)
+
+    def test_trilingual_rendering_and_escaping(self) -> None:
+        export = build_export()
+        expected = {
+            "en": ("## 1. Executive Summary", "## 4. Findings", '<html lang="en">', "ARIA-X · Authorized Security Assessment", ("critical", "assets", "facts")),
+            "zh-CN": ("## 1. 执行摘要", "## 4. 安全发现", '<html lang="zh-CN">', "ARIA-X · 授权安全评估", ("严重", "资产", "事实")),
+            "ja": ("## 1. エグゼクティブサマリー", "## 4. 検出事項", '<html lang="ja">', "ARIA-X · 認可済みセキュリティ評価", ("緊急", "資産", "事実")),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for lang, (h1, h4, html_lang, eyebrow, stat_labels) in expected.items():
+                meta = {"run_id": "r_i18n", "generated_at": "2026-01-02T03:04:05Z"}
+                out_dir = Path(tmp) / lang
+                paths = write_report(out_dir, export, meta, language=lang)
+                md = Path(paths["markdown"]).read_text(encoding="utf-8")
+                html_text = Path(paths["html"]).read_text(encoding="utf-8")
+                payload = json.loads(Path(paths["json"]).read_text(encoding="utf-8"))
+
+                self.assertIn(h1, md)
+                self.assertIn(h4, md)
+                self.assertIn(html_lang, html_text)
+                self.assertIn(eyebrow, html_text)
+                for lbl in stat_labels:
+                    self.assertIn(f'<div class="label">{lbl}</div>', html_text)
+                # Raw finding content and escaping preserved in every language
+                self.assertIn("SQL injection in login", md)
+                self.assertIn("weird\\|value", md)
+                self.assertNotIn("<script>alert(1)</script>", html_text)
+                self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", html_text)
+                self.assertNotIn("<script", html_text.lower())
+                self.assertEqual(payload["counts"]["total_findings"], 2)
+
+    def test_empty_export_trilingual(self) -> None:
+        project = Project.new("Empty & <Test>", "nothing found")
+        store = Store(":memory:")
+        try:
+            store.create_project(project)
+            export = store.export_project(project.id)
+        finally:
+            store.close()
+        for lang, marker in (
+            ("zh-CN", "_本次评估未确认任何安全发现。_"),
+            ("ja", "_本エンゲージメントでは確定した検出事項はありませんでした。_"),
+        ):
+            md = render_markdown(export, meta={"run_id": "r0"}, language=lang)
+            self.assertIn(marker, md)
+            html_text = render_html(md, export, {"run_id": "r0"}, language=lang)
+            self.assertIn(f'<html lang="{lang}">', html_text)
+            self.assertIn("Empty &amp; &lt;Test&gt;", html_text)
+
+    def test_historical_report_files_remain_unmodified(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            hist = Path(tmp) / "legacy_run" / "report.html"
+            hist.parent.mkdir(parents=True)
+            original = "<!DOCTYPE html><html lang=\"en\"><body>Historical Report</body></html>"
+            hist.write_text(original, encoding="utf-8")
+            # Rendering a new report in another directory never touches historical artifacts
+            export = build_export()
+            write_report(Path(tmp) / "new_run", export, {"run_id": "r_new"}, language="zh-CN")
+            self.assertEqual(hist.read_text(encoding="utf-8"), original)
 
 
 if __name__ == "__main__":

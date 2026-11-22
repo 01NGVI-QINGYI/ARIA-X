@@ -58,8 +58,10 @@ change, but persisted schema changes will include a migration note.
   perform exact per-run DB attribution lookups without a recent-runs cap, match exact
   run/project IDs, reject conflicting DB/directory/metadata attribution, and apply
   unified archive recognition across no-arg, `<run_id>`, and `--project-id` modes for
-  depth-2 nested archives (`demo-<stamp>/<run_id>`) and legacy flat
-  `<project_id>-<run_id>` archives; updated Web console `loadReport()`, `ensureGraph()`,
+  depth-2 nested archives (`demo-<stamp>/<run_id>`), legacy flat
+  `<project_id>-<run_id>` archives, and legacy timestamped `<project_id>-<stamp>`
+  archives (treating explicit timestamps as archive naming while validating run/project
+  attribution against `findings.json` and read-only SQLite); updated Web console `loadReport()`, `ensureGraph()`,
   and `selectProject()` with monotonic request-sequence and timer guards so stale or
   cross-project responses cannot overwrite the active project, while keeping preview
   and Markdown download bound to the same run; replaced hardcoded `"0.1.0"`/`"v0.1"`

@@ -19,7 +19,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable
 from urllib.parse import quote
 
 from . import __version__, TAGLINE
@@ -29,7 +29,7 @@ from .events import Event, EventBus
 from .models import Project, Usage
 from .store import Store
 from .util import json_dumps, json_loads, now_iso, slugify
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -690,46 +690,82 @@ def _dir_report_mtime(directory: Path) -> float:
     return max(mtimes) if mtimes else 0.0
 
 
-def _read_runs_readonly(
-    db_path: Path,
-    *,
-    project_id: str | None = None,
-    run_id: str | None = None,
-    limit: int = 100,
-) -> list[tuple[str, str, str]]:
-    """Query existing runs strictly read-only without ever initializing or mutating SQLite."""
-    try:
-        if not db_path.is_file() or db_path.stat().st_size == 0:
-            return []
-        uri = f"file:{quote(str(db_path.resolve()), safe='/')}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True, timeout=2.0)
-    except (OSError, sqlite3.Error):
-        return []
-    try:
-        conn.execute("PRAGMA query_only = ON")
-        if run_id is not None:
-            cur = conn.execute(
-                "SELECT id, project_id, started_at FROM runs WHERE id = ? ORDER BY started_at DESC LIMIT ?",
-                (run_id, limit),
-            )
-        elif project_id is not None:
-            cur = conn.execute(
-                "SELECT id, project_id, started_at FROM runs WHERE project_id = ? ORDER BY started_at DESC LIMIT ?",
-                (project_id, limit),
-            )
-        else:
-            cur = conn.execute(
-                "SELECT id, project_id, started_at FROM runs ORDER BY started_at DESC LIMIT ?",
-                (limit,),
-            )
-        return [(str(r[0]), str(r[1]), str(r[2] or "")) for r in cur.fetchall()]
-    except sqlite3.Error:
-        return []
-    finally:
+class _ReadOnlyRunDB:
+    """Strictly read-only SQLite lookup helper that never initializes or mutates the DB."""
+
+    def __init__(self, db_path: Path) -> None:
+        self._conn: sqlite3.Connection | None = None
+        self._run_cache: dict[str, list[tuple[str, str]]] = {}
+        self._project_cache: dict[str, bool] = {}
         try:
-            conn.close()
+            if not db_path.is_file() or db_path.stat().st_size == 0:
+                return
+            uri = f"file:{quote(str(db_path.resolve()), safe='/')}?mode=ro"
+            conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+            conn.execute("PRAGMA query_only = ON")
+            self._conn = conn
+        except (OSError, sqlite3.Error):
+            self._conn = None
+
+    def close(self) -> None:
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
+            self._conn = None
+
+    def lookup_run(self, run_id: str) -> list[tuple[str, str]]:
+        if not run_id or self._conn is None:
+            return []
+        if run_id in self._run_cache:
+            return self._run_cache[run_id]
+        try:
+            cur = self._conn.execute(
+                "SELECT project_id, started_at FROM runs WHERE id = ? ORDER BY started_at DESC",
+                (run_id,),
+            )
+            rows = [(str(r[0] or ""), str(r[1] or "")) for r in cur.fetchall()]
         except sqlite3.Error:
-            pass
+            rows = []
+        self._run_cache[run_id] = rows
+        return rows
+
+    def has_project(self, project_id: str) -> bool:
+        if not project_id or self._conn is None:
+            return False
+        if project_id in self._project_cache:
+            return self._project_cache[project_id]
+        found = False
+        try:
+            cur = self._conn.execute(
+                "SELECT 1 FROM projects WHERE id = ? LIMIT 1",
+                (project_id,),
+            )
+            if cur.fetchone() is not None:
+                found = True
+            else:
+                cur = self._conn.execute(
+                    "SELECT 1 FROM runs WHERE project_id = ? LIMIT 1",
+                    (project_id,),
+                )
+                found = cur.fetchone() is not None
+        except sqlite3.Error:
+            found = False
+        self._project_cache[project_id] = found
+        return found
+
+
+@dataclass(frozen=True)
+class _ReportArchive:
+    directory: Path
+    project_id: str
+    run_id: str
+    in_db: bool
+    db_started_at: str
+    mtime: float
+    flat_splits: tuple[tuple[str, str], ...] = ()
+    project_only_name: str = ""
 
 
 def _scan_report_dirs(runs_dir: Path) -> list[Path]:
@@ -776,52 +812,126 @@ def _read_report_metadata(directory: Path) -> tuple[str, str]:
     return proj_id, run_id
 
 
-def _candidate_attribution_ok(
-    directory: Path,
-    runs_dir: Path,
-    *,
-    expected_project_id: str | None,
-    expected_run_id: str | None,
-    db_run_to_project: Mapping[str, str],
-) -> bool:
-    """Reject candidates with conflicting DB/directory/metadata attribution."""
+def _inspect_report_dir(directory: Path, runs_dir: Path, db: _ReadOnlyRunDB) -> _ReportArchive | None:
+    """Parse and validate a report archive's attribution independently of query mode."""
     meta_pid, meta_rid = _read_report_metadata(directory)
     dir_pid = ""
     dir_rid = ""
+    flat_splits: tuple[tuple[str, str], ...] = ()
+    project_only_name = ""
+
     parent = directory.parent
     if parent.parent == runs_dir:
         dir_rid = directory.name
         dir_pid = "" if parent.name.startswith("demo-") else parent.name
     elif parent == runs_dir:
         name = directory.name
-        if expected_run_id and name.endswith(f"-{expected_run_id}") and len(name) > len(expected_run_id) + 1:
-            dir_pid = name[:-(len(expected_run_id) + 1)]
-            dir_rid = expected_run_id
-        elif expected_project_id and name.startswith(f"{expected_project_id}-") and len(name) > len(expected_project_id) + 1:
-            dir_pid = expected_project_id
-            dir_rid = name[len(expected_project_id) + 1:]
-        elif expected_project_id and name == expected_project_id:
-            dir_pid = expected_project_id
+        exact_db_rows = db.lookup_run(name)
+        if meta_rid == name or exact_db_rows:
+            dir_pid = ""
+            dir_rid = name
+        elif meta_pid and meta_rid and name == f"{meta_pid}-{meta_rid}":
+            dir_pid = meta_pid
+            dir_rid = meta_rid
+        elif meta_rid and name.endswith(f"-{meta_rid}") and len(name) > len(meta_rid) + 1:
+            dir_pid = name[:-(len(meta_rid) + 1)]
+            dir_rid = meta_rid
+        elif meta_pid and name.startswith(f"{meta_pid}-") and len(name) > len(meta_pid) + 1:
+            dir_pid = meta_pid
+            dir_rid = name[len(meta_pid) + 1:]
+        elif meta_pid and name == meta_pid:
+            dir_pid = meta_pid
             dir_rid = ""
         else:
-            dir_rid = name
+            all_splits = [
+                (name[:i], name[i + 1:])
+                for i, ch in enumerate(name)
+                if ch == "-" and 0 < i < len(name) - 1
+            ]
+            db_run_splits = [(p, r, rows) for p, r in all_splits if (rows := db.lookup_run(r))]
+            if db_run_splits:
+                matching = [
+                    (p, r) for p, r, rows in db_run_splits if any(db_pid == p for db_pid, _ in rows)
+                ]
+                if matching:
+                    dir_pid, dir_rid = max(matching, key=lambda item: len(item[1]))
+                else:
+                    dir_pid, dir_rid = db_run_splits[0][0], db_run_splits[0][1]
+            else:
+                db_proj_splits = [(p, r) for p, r in all_splits if db.has_project(p)]
+                if len(db_proj_splits) == 1:
+                    dir_pid, dir_rid = db_proj_splits[0]
+                elif db.has_project(name):
+                    dir_pid, dir_rid = name, ""
+                elif not meta_pid and not meta_rid:
+                    dir_pid = ""
+                    dir_rid = name
+                    flat_splits = tuple(all_splits)
+                    project_only_name = name
+                else:
+                    dir_pid = ""
+                    dir_rid = name
+    else:
+        return None
 
-    if expected_run_id and meta_rid and meta_rid != expected_run_id:
-        return False
-    if meta_rid and dir_rid and meta_rid != dir_rid and directory.name != expected_project_id:
-        return False
+    if meta_rid and dir_rid and meta_rid != dir_rid:
+        return None
 
-    db_pid = (
-        db_run_to_project.get(expected_run_id or "", "")
-        or db_run_to_project.get(meta_rid, "")
-        or db_run_to_project.get(dir_rid, "")
+    resolved_rid = meta_rid or dir_rid
+    db_rows: list[tuple[str, str]] = []
+    seen_rids: set[str] = set()
+    for rid in (meta_rid, dir_rid):
+        if rid and rid not in seen_rids:
+            seen_rids.add(rid)
+            db_rows.extend(db.lookup_run(rid))
+
+    db_pids = {pid for pid, _ in db_rows if pid}
+    in_db = bool(db_rows)
+    db_started_at = max((ts for _, ts in db_rows), default="")
+
+    evidences = set(db_pids)
+    if dir_pid:
+        evidences.add(dir_pid)
+    if meta_pid:
+        evidences.add(meta_pid)
+    if len(evidences) > 1:
+        return None
+
+    resolved_pid = next(iter(evidences), "")
+    return _ReportArchive(
+        directory=directory,
+        project_id=resolved_pid,
+        run_id=resolved_rid,
+        in_db=in_db,
+        db_started_at=db_started_at,
+        mtime=_dir_report_mtime(directory),
+        flat_splits=flat_splits,
+        project_only_name=project_only_name,
     )
-    evidences = [p for p in (db_pid, dir_pid, meta_pid) if p]
-    if len(set(evidences)) > 1:
-        return False
-    if expected_project_id:
-        return bool(evidences) and set(evidences) == {expected_project_id}
-    return True
+
+
+def _archive_matches(
+    archive: _ReportArchive,
+    *,
+    expected_project_id: str | None,
+    expected_run_id: str | None,
+) -> bool:
+    if expected_project_id is None and expected_run_id is None:
+        return True
+    if expected_project_id is not None and expected_run_id is not None:
+        return (
+            (archive.project_id == expected_project_id and archive.run_id == expected_run_id)
+            or ((expected_project_id, expected_run_id) in archive.flat_splits)
+        )
+    if expected_run_id is not None:
+        return archive.run_id == expected_run_id or any(
+            r == expected_run_id for _, r in archive.flat_splits
+        )
+    return (
+        archive.project_id == expected_project_id
+        or archive.project_only_name == expected_project_id
+        or any(p == expected_project_id for p, _ in archive.flat_splits)
+    )
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -831,106 +941,29 @@ def cmd_report(args: argparse.Namespace) -> int:
         print("[aria-x] no report found", file=sys.stderr)
         return 2
 
-    db_path = Path(config.db_path)
-    db_all_runs = _read_runs_readonly(db_path, limit=1000)
-    db_run_to_project = {rid: pid for rid, pid, _ in db_all_runs if pid}
-    candidates: list[Path] = []
-    seen: set[str] = set()
-
-    def add_candidate(path: Path) -> None:
-        if not _within_runs_root(path, runs_dir):
-            return
-        if not _candidate_attribution_ok(
-            path,
-            runs_dir,
-            expected_project_id=args.project_id,
-            expected_run_id=args.run_id,
-            db_run_to_project=db_run_to_project,
-        ):
-            return
-        try:
-            key = str(path.resolve())
-        except OSError:
-            return
-        if key not in seen:
-            seen.add(key)
-            candidates.append(path)
-
-    report_dirs = _scan_report_dirs(runs_dir)
-
-    if args.run_id:
-        run_id = str(args.run_id)
-        db_runs = _read_runs_readonly(db_path, run_id=run_id)
-        if args.project_id:
-            for rid, pid, _ in db_runs:
-                if pid == args.project_id:
-                    add_candidate(runs_dir / rid)
-                    add_candidate(runs_dir / pid / rid)
-                    add_candidate(runs_dir / f"{pid}-{rid}")
-            add_candidate(runs_dir / f"{args.project_id}-{run_id}")
-            add_candidate(runs_dir / args.project_id / run_id)
-        else:
-            for rid, pid, _ in db_runs:
-                add_candidate(runs_dir / rid)
-                if pid:
-                    add_candidate(runs_dir / pid / rid)
-                    add_candidate(runs_dir / f"{pid}-{rid}")
-            add_candidate(runs_dir / run_id)
-
-        fs_matches: list[Path] = []
-        for directory in report_dirs:
-            _, meta_rid = _read_report_metadata(directory)
-            is_flat_legacy = (
-                directory.parent == runs_dir
-                and directory.name.endswith(f"-{run_id}")
-                and len(directory.name) > len(run_id) + 1
-            )
-            if directory.name != run_id and meta_rid != run_id and not is_flat_legacy:
+    db = _ReadOnlyRunDB(Path(config.db_path))
+    try:
+        archives: list[_ReportArchive] = []
+        for directory in _scan_report_dirs(runs_dir):
+            archive = _inspect_report_dir(directory, runs_dir, db)
+            if archive is None:
                 continue
-            fs_matches.append(directory)
-        fs_matches.sort(key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
-        for directory in fs_matches:
-            add_candidate(directory)
+            if _archive_matches(
+                archive,
+                expected_project_id=args.project_id,
+                expected_run_id=args.run_id,
+            ):
+                archives.append(archive)
+    finally:
+        db.close()
 
-    elif args.project_id:
-        project_id = str(args.project_id)
-        db_runs = _read_runs_readonly(db_path, project_id=project_id)
-        for rid, _, _ in db_runs:
-            add_candidate(runs_dir / rid)
-            add_candidate(runs_dir / project_id / rid)
-            add_candidate(runs_dir / f"{project_id}-{rid}")
-            for directory in report_dirs:
-                if directory.name == rid:
-                    add_candidate(directory)
+    archives.sort(
+        key=lambda a: (1 if a.in_db else 0, a.db_started_at, a.mtime, str(a.directory)),
+        reverse=True,
+    )
 
-        fs_matches = []
-        for directory in report_dirs:
-            meta_pid, _ = _read_report_metadata(directory)
-            is_exact_proj_dir = directory.parent == runs_dir and directory.name == project_id
-            is_under_proj_dir = directory.parent.parent == runs_dir and directory.parent.name == project_id
-            is_flat_legacy = (
-                directory.parent == runs_dir
-                and directory.name.startswith(f"{project_id}-")
-                and len(directory.name) > len(project_id) + 1
-            )
-            if is_exact_proj_dir or is_under_proj_dir or is_flat_legacy or meta_pid == project_id:
-                fs_matches.append(directory)
-        fs_matches.sort(key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
-        for directory in fs_matches:
-            add_candidate(directory)
-
-    else:
-        for rid, pid, _ in db_all_runs:
-            add_candidate(runs_dir / rid)
-            if pid:
-                add_candidate(runs_dir / pid / rid)
-                add_candidate(runs_dir / f"{pid}-{rid}")
-        fs_dirs = sorted(report_dirs, key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
-        for directory in fs_dirs:
-            add_candidate(directory)
-
-    for candidate in candidates:
-        target = _pick_report_in_dir(candidate, runs_dir)
+    for archive in archives:
+        target = _pick_report_in_dir(archive.directory, runs_dir)
         if target is not None:
             print(str(target))
             if args.open:

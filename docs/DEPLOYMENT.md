@@ -192,13 +192,13 @@ python -m aria_x serve --host 127.0.0.1 --port 8787
 ### 6.1 构建与运行
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.1.1 .
+docker build -f docker/Dockerfile -t aria-x:0.2.0 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.1.1
+  aria-x:0.2.0
 ```
 
 镜像只包含 ARIA-X 本体（标准库），**不包含**扫描工具。镜像默认以 UID 10001 的非 root 用户运行；
@@ -215,7 +215,7 @@ export ARIA_X_UID="$(id -u)" ARIA_X_GID="$(id -g)"   # match the mounted data di
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-`docker/docker-compose.yml` 还提供一个 `sandbox` profile 的 Kali 容器作为参考；它默认不启动，
+`docker/docker-compose.yml` 强制要求显式设置 `ARIA_X_AUTH_TOKEN`（未设置或为空时 `docker compose` 会直接报错退出，不再使用固定默认口令）。它还提供一个 `sandbox` profile 的 Kali 容器作为参考；它默认不启动，
 也不与 ARIA-X 容器共享网络。
 
 ### 6.3 在容器里跑 ARIA-X + Docker 沙箱
@@ -291,7 +291,7 @@ schema 不兼容，保留备份并查阅 release notes。
 # 停止进程后
 rm -rf data runs                      # ⚠️ 会删除全部 engagement 状态与报告
 docker ps -a --filter name=aria-x- --format '{{.ID}}' | xargs -r docker rm -f
-docker image rm aria-x:0.1.1 aria-x-kali:latest 2>/dev/null || true
+docker image rm aria-x:0.2.0 aria-x-kali:latest 2>/dev/null || true
 ```
 
 删除前请确认路径，避免误删其他项目。

@@ -33,8 +33,96 @@ class ScopeAuthorizationTests(unittest.TestCase):
     def test_url_target_with_path_prefix_and_port(self):
         scope = make_scope(["http://127.0.0.1:8080/app"])
         self.assertTrue(scope.authorize_url("http://127.0.0.1:8080/app/index").allowed)
+        self.assertFalse(scope.authorize_url("http://127.0.0.1:8080/admin").allowed)
+        self.assertFalse(scope.authorize_url("http://127.0.0.1:8080/app/../admin").allowed)
+        self.assertFalse(scope.authorize_url("https://127.0.0.1:8080/app/index").allowed)
         self.assertFalse(scope.authorize_url("http://127.0.0.1:9090/app/index").allowed)
         self.assertFalse(scope.authorize_url("ftp://127.0.0.1:8080/app").allowed)
+
+    def test_wildcard_url_target_enforces_scheme_and_prefix(self):
+        scope = make_scope(["https://*.staging.example.test/api"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=[]):
+            self.assertTrue(scope.authorize_url("https://app.staging.example.test/api/v1").allowed)
+            self.assertFalse(scope.authorize_url("http://app.staging.example.test/api/v1").allowed)
+            self.assertFalse(scope.authorize_url("https://app.staging.example.test/admin").allowed)
+
+    def test_allow_public_targets_false_blocks_global_ips(self):
+        scope = Scope(
+            ScopeConfig(authorized=True, targets=["8.8.8.8", "127.0.0.1"], allow_loopback=True, max_rps=1000.0),
+            allow_public_targets=False,
+        )
+        self.assertTrue(scope.authorize_host("127.0.0.1").allowed)
+        decision = scope.authorize_host("8.8.8.8")
+        self.assertFalse(decision.allowed)
+        self.assertIn("public address", decision.reason)
+
+    def test_strict_url_path_prefix_blocks_encoded_and_ambiguous_traversal(self):
+        scope = make_scope(["http://127.0.0.1:8080/api"])
+        for allowed in (
+            "http://127.0.0.1:8080/api",
+            "http://127.0.0.1:8080/api/",
+            "http://127.0.0.1:8080/api/v1/items",
+            "http://127.0.0.1:8080/api/users/alice%20smith",
+            "http://127.0.0.1:8080/api/files?path=../flag.txt",
+        ):
+            self.assertTrue(scope.authorize_url(allowed).allowed, f"expected allowed: {allowed}")
+
+        for blocked in (
+            "http://127.0.0.1:8080/api/../admin",
+            "http://127.0.0.1:8080/api/sub/../v1",
+            "http://127.0.0.1:8080/api/./v1",
+            "http://127.0.0.1:8080/api/%2e%2e/admin",
+            "http://127.0.0.1:8080/api/%2E%2E%2Fadmin",
+            "http://127.0.0.1:8080/api/%252e%252e/admin",
+            "http://127.0.0.1:8080/api/%25252525252e%25252525252e/admin",
+            "http://127.0.0.1:8080/api/%252525252520",
+            "http://127.0.0.1:8080/api/%5c..%5cadmin",
+            "http://127.0.0.1:8080/api/..;/admin",
+            "http://127.0.0.1:8080/api;foo/bar",
+            "http://127.0.0.1:8080/api\\..\\admin",
+            "http://127.0.0.1:8080//api/v1",
+            "http://127.0.0.1:8080/api//v1",
+            "http://127.0.0.1:8080/api/%ZZ",
+            "http://127.0.0.1:8080/api/v1\r\n",
+        ):
+            decision = scope.authorize_url(blocked)
+            self.assertFalse(decision.allowed, f"expected blocked: {blocked}")
+
+        over_limit = scope.authorize_url("http://127.0.0.1:8080/api/%252525252520")
+        self.assertFalse(over_limit.allowed)
+        self.assertIn("exceeds percent-decoding limit", over_limit.reason)
+
+    def test_allow_public_targets_false_fails_closed_on_unresolved_and_mixed_hosts(self):
+        scope = Scope(
+            ScopeConfig(
+                authorized=True,
+                targets=["*.example.test", "127.0.0.1"],
+                deny=["blocked.example.test"],
+                allow_loopback=True,
+                allow_private=True,
+                max_rps=1000.0,
+            ),
+            allow_public_targets=False,
+        )
+        with mock.patch("aria_x.tools.scope._resolve", return_value=[]):
+            d_unresolved = scope.authorize_host("app.example.test")
+            self.assertFalse(d_unresolved.allowed)
+            self.assertIn("unresolved", d_unresolved.reason)
+
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["93.184.216.34"]):
+            self.assertFalse(scope.authorize_host("app.example.test").allowed)
+
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1", "93.184.216.34"]):
+            self.assertFalse(scope.authorize_host("app.example.test").allowed)
+
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["10.0.0.5"]):
+            self.assertTrue(scope.authorize_host("app.example.test").allowed)
+
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+            self.assertTrue(scope.authorize_host("app.example.test").allowed)
+            d_deny = scope.authorize_host("blocked.example.test")
+            self.assertFalse(d_deny.allowed)
+            self.assertIn("deny", d_deny.reason)
 
     def test_wildcard_domain(self):
         scope = make_scope(["*.example.test"])

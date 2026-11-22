@@ -13,7 +13,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: aria-x:0.1.1
+    image: aria-x:0.2.0
     container_name: aria-x-console
     restart: unless-stopped
     # Match the host owner of ../data and ../runs (see docker/README below).
@@ -21,7 +21,7 @@ services:
     ports:
       - "127.0.0.1:8787:8787"
     environment:
-      ARIA_X_AUTH_TOKEN: "${ARIA_X_AUTH_TOKEN:-change-me-before-use}"
+      ARIA_X_AUTH_TOKEN: "${ARIA_X_AUTH_TOKEN:?Set ARIA_X_AUTH_TOKEN in your environment or .env before starting docker compose}"
       ARIA_X_DATA_DIR: /app/data
       ARIA_X_LOG_LEVEL: "${ARIA_X_LOG_LEVEL:-INFO}"
       ARIA_X_PROVIDER: "${ARIA_X_PROVIDER:-openai}"

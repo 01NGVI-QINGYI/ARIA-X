@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from .. import __version__
 from ..config import AriaXConfig, ScopeConfig
 from ..errors import AriaXError, BudgetExceeded, Cancelled, ConfigError
 from ..events import (
@@ -182,7 +183,10 @@ class Orchestrator:
         self.router = ModelRouter(self.config, budget=self.budget, events=self.events,
                                   project_id=project.id, run_id=run.id,
                                   provider=self.provider)
-        self.scope = Scope(self._effective_scope(project_scope))
+        self.scope = Scope(
+            self._effective_scope(project_scope),
+            allow_public_targets=bool(self.config.safety.allow_public_targets),
+        )
         if not self.scope.config.authorized or not (
                 self.scope.host_rules or self.scope.net_rules or self.scope.url_rules):
             raise ConfigError("refusing to start: engagement scope has no authorized targets")
@@ -195,7 +199,11 @@ class Orchestrator:
         self.sessions = SessionManager()
         self.workdir = Path(self.config.sandbox.workdir) if self.config.sandbox.workdir \
             else run_dir / "work"
-        self.sandbox = self._sandbox_override or build_sandbox(self.config.sandbox, self.workdir)
+        self.sandbox = self._sandbox_override or build_sandbox(
+            self.config.sandbox,
+            self.workdir,
+            extra_blocked_patterns=tuple(self.config.safety.extra_blocked_patterns or ()),
+        )
 
         base_ctx = ToolContext(
             project=project, run_id=run.id, task_id="", agent="orchestrator",
@@ -1156,7 +1164,7 @@ class Orchestrator:
             "counts": self.store.counts(self.project.id),
             "model": self.config.llm.model,
             "provider": self.config.llm.provider,
-            "version": "0.1.0",
+            "version": __version__,
         }
         report_error = ""
         writer = _load_write_report()

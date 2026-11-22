@@ -17,13 +17,14 @@ Every network-capable tool calls :meth:`Scope.require_url` or
 from __future__ import annotations
 
 import ipaddress
+import posixpath
 import re
 import socket
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from ..config import ScopeConfig
 from ..errors import ScopeViolation
@@ -65,24 +66,79 @@ class _HostRule:
         return True
 
 
+_ENCODED_TRAVERSAL = re.compile(r"%(?:2e|2f|5c|00)", re.I)
+_BAD_PERCENT = re.compile(r"%(?![0-9a-fA-F]{2})")
+
+
+def _has_control_chars(value: str) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def _validate_scoped_path(raw_path: str) -> tuple[bool, str, str]:
+    """Validate a URL path strictly without rewriting ambiguous traversal segments."""
+    path = raw_path or "/"
+    if not path.startswith("/"):
+        return False, "", "URL path must start with '/'"
+    if _has_control_chars(path):
+        return False, "", "URL path contains control characters"
+    if "\\" in path or ";" in path or "//" in path:
+        return False, "", "URL path contains ambiguous separator or parameter syntax"
+    if _BAD_PERCENT.search(path):
+        return False, "", "URL path contains malformed percent-encoding"
+    if any(seg in {".", ".."} for seg in path.split("/")):
+        return False, "", "URL path contains dot traversal segments"
+
+    cur = path
+    for _ in range(5):
+        if _ENCODED_TRAVERSAL.search(cur):
+            return False, "", "encoded path separator or dot segment not allowed"
+        nxt = unquote(cur)
+        if _has_control_chars(nxt):
+            return False, "", "decoded URL path contains control characters"
+        if "\\" in nxt or ";" in nxt or "//" in nxt:
+            return False, "", "decoded URL path contains ambiguous separator"
+        if any(seg.split(";", 1)[0] in {".", ".."} for seg in nxt.split("/")):
+            return False, "", "decoded URL path contains dot traversal segments"
+        if nxt == cur:
+            break
+        cur = nxt
+    else:
+        return False, "", "URL path exceeds percent-decoding limit"
+
+    normalized = path.rstrip("/") or "/"
+    return True, normalized, ""
+
+
 @dataclass(slots=True)
 class _UrlRule:
     scheme: str
     host_rule: _HostRule
     path_prefix: str = ""
 
-    def matches(self, scheme: str, host: str, port: int | None, path: str) -> bool:
+    def check(self, scheme: str, host: str, port: int | None, path: str) -> tuple[bool, str]:
         if self.scheme and self.scheme != scheme:
-            return False
+            return False, ""
         if not self.host_rule.matches(host, port):
-            return False
-        prefix = self.path_prefix or "/"
-        return path == prefix or path.startswith(prefix if prefix.endswith("/") else prefix + "/") or not self.path_prefix
+            return False, ""
+        prefix = self.path_prefix.rstrip("/")
+        if not prefix:
+            return True, ""
+        ok, cmp_path, reason = _validate_scoped_path(path or "/")
+        if not ok:
+            return False, reason
+        if cmp_path == prefix or cmp_path.startswith(prefix + "/"):
+            return True, ""
+        return False, ""
+
+    def matches(self, scheme: str, host: str, port: int | None, path: str) -> bool:
+        ok, _ = self.check(scheme, host, port, path)
+        return ok
 
 
 class Scope:
-    def __init__(self, config: ScopeConfig) -> None:
+    def __init__(self, config: ScopeConfig, *, allow_public_targets: bool = True) -> None:
         self.config = config
+        self.allow_public_targets = bool(allow_public_targets)
         self.host_rules: list[_HostRule] = []
         self.net_rules: list[ipaddress._BaseNetwork] = []
         self.url_rules: list[_UrlRule] = []
@@ -108,14 +164,15 @@ class Scope:
             return
         if "://" in pattern:
             parts = urlsplit(pattern)
-            host = parts.hostname or ""
-            port = parts.port
+            scheme = parts.scheme.lower()
+            host = (parts.hostname or "").strip().lower()
+            port = parts.port or (443 if scheme == "https" else (80 if scheme == "http" else None))
+            clean_host = host.lstrip("*").lstrip(".")
             self.url_rules.append(_UrlRule(
-                scheme=parts.scheme.lower(),
-                host_rule=_HostRule(host=host, port=port, wildcard=host.startswith("*.")),
+                scheme=scheme,
+                host_rule=_HostRule(host=clean_host, port=port, wildcard=host.startswith("*.")),
                 path_prefix=parts.path.rstrip("/"),
             ))
-            self.add_host_rule(host, port)
             return
         if self._try_network(pattern, self.net_rules):
             return
@@ -161,25 +218,46 @@ class Scope:
     # ------------------------------------------------------------------
 
     def authorize_url(self, url: str, method: str = "GET") -> Decision:
-        parts = urlsplit(url)
-        if parts.scheme not in {"http", "https"}:
+        raw_url = str(url or "")
+        if raw_url != raw_url.strip() or _has_control_chars(raw_url):
+            return Decision(False, "URL contains leading/trailing whitespace or control characters", url)
+        parts = urlsplit(raw_url)
+        if "\\" in (parts.netloc or ""):
+            return Decision(False, "URL authority contains invalid backslash", url)
+        scheme = parts.scheme.lower()
+        if scheme not in {"http", "https"}:
             return Decision(False, f"unsupported scheme '{parts.scheme}'", url)
         host = parts.hostname or ""
-        port = parts.port or (443 if parts.scheme == "https" else 80)
+        port = parts.port or (443 if scheme == "https" else 80)
         path = parts.path or "/"
-        decision = self._authorize(host, port, target=url)
+        decision = self._check_common(host, port, target=url)
         if not decision.allowed:
             return decision
-        # If explicit URL rules exist, a URL must match at least one of them
-        # *unless* it matches a host/CIDR rule directly.
-        if self.url_rules and not any(rule.matches(parts.scheme, host, port, path) for rule in self.url_rules):
-            if not self._matches_host_or_net(host, port, decision.ips):
-                return Decision(False, "URL is not covered by any scope URL prefix", url, host, port, decision.ips)
-        decision.host, decision.port, decision.target = host, port, url
-        return decision
+        if self._matches_host_or_net(decision.host, port, decision.ips):
+            return Decision(True, "in scope", url, decision.host, port, decision.ips)
+        path_reason = ""
+        for rule in self.url_rules:
+            matched, rule_reason = rule.check(scheme, decision.host, port, path)
+            if matched:
+                return Decision(True, "in scope", url, decision.host, port, decision.ips)
+            if rule_reason and not path_reason:
+                path_reason = rule_reason
+        reason = path_reason or (
+            "URL is not covered by any scope URL prefix"
+            if self.url_rules else "target is not in scope"
+        )
+        return Decision(False, reason, url, decision.host, port, decision.ips)
 
     def authorize_host(self, host: str, port: int | None = None, *, target: str = "") -> Decision:
-        return self._authorize(host, port, target=target or (f"{host}:{port}" if port else host))
+        eff_target = target or (f"{host}:{port}" if port else host)
+        decision = self._check_common(host, port, target=eff_target)
+        if not decision.allowed:
+            return decision
+        if self._matches_host_or_net(decision.host, port, decision.ips) or any(
+            rule.host_rule.matches(decision.host, port) for rule in self.url_rules
+        ):
+            return Decision(True, "in scope", eff_target, decision.host, port, decision.ips)
+        return Decision(False, "target is not in scope", eff_target, decision.host, port, decision.ips)
 
     def require_url(self, url: str, method: str = "GET") -> Decision:
         decision = self.authorize_url(url, method)
@@ -193,7 +271,7 @@ class Scope:
             raise ScopeViolation(decision.reason, target=host, host=host, port=port)
         return decision
 
-    def _authorize(self, host: str, port: int | None, *, target: str) -> Decision:
+    def _check_common(self, host: str, port: int | None, *, target: str) -> Decision:
         host = (host or "").strip().lower().strip(".")
         if not host:
             return Decision(False, "empty target host", target)
@@ -208,12 +286,18 @@ class Scope:
                 return Decision(False, f"host matches deny rule '{rule.host}'", target, host, port)
 
         ips: list[str] = []
-        literal_ip: ipaddress._BaseAddress | None = None
         try:
-            literal_ip = ipaddress.ip_address(host)
+            ipaddress.ip_address(host)
             ips = [host]
         except ValueError:
             ips = _resolve(host)
+
+        if not self.allow_public_targets and not ips:
+            return Decision(
+                False,
+                f"cannot verify non-public address for unresolved host '{host}'",
+                target, host, port, ips,
+            )
 
         for ip_text in ips:
             try:
@@ -228,13 +312,10 @@ class Scope:
             if (ip.is_private or ip.is_link_local or ip.is_reserved) and not self.config.allow_private \
                     and not ip.is_loopback:
                 return Decision(False, f"private address {ip} not allowed", target, host, port, ips)
+            if not self.allow_public_targets and ip.is_global:
+                return Decision(False, f"public address {ip} not allowed", target, host, port, ips)
 
-        if self._matches_host_or_net(host, port, ips):
-            return Decision(True, "in scope", target, host, port, ips)
-        # An unresolved name that matched an explicit host rule was already
-        # accepted above. Anything else must be denied: DNS failure is not proof
-        # of authorization, and a typo must not silently widen scope.
-        return Decision(False, "target is not in scope", target, host, port, ips)
+        return Decision(True, "", target, host, port, ips)
 
     def _matches_host_or_net(self, host: str, port: int | None, ips: Sequence[str]) -> bool:
         for rule in self.host_rules:
@@ -270,7 +351,7 @@ class Scope:
                 ip = ipaddress.ip_address(match)
             except ValueError:
                 continue
-            decision = self._authorize(str(ip), None, target=str(ip))
+            decision = self.authorize_host(str(ip), None, target=str(ip))
             if not decision.allowed:
                 return decision
         return Decision(True, "no explicit out-of-scope literal found", command)
@@ -289,6 +370,7 @@ class Scope:
                            "path": r.path_prefix} for r in self.url_rules],
             "allow_private": self.config.allow_private,
             "allow_loopback": self.config.allow_loopback,
+            "allow_public_targets": self.allow_public_targets,
             "max_rps": self.config.max_rps,
         }
 

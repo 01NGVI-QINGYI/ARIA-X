@@ -7,10 +7,12 @@ Windows, where ARIA-X is not a supported target anyway.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from aria_x.config import AriaXConfig, ScopeConfig
 from aria_x.events import EventBus
@@ -189,6 +191,96 @@ class SessionTests(unittest.TestCase):
         self.assertIn("session_send", actions)
         traces = self.store.list_traces(self.project.id, limit=50)
         self.assertTrue(any(t.tool_name == "session_open" for t in traces))
+
+    def test_session_sanitizes_host_secret_env(self) -> None:
+        with mock.patch.dict(os.environ, {"ARIA_X_API_KEY": "sk-synthetic-secret-000", "ARIA_X_AUTH_TOKEN": "tok-synthetic"}):
+            session_id = self.open()
+            sent = self.send(session_id, 'printf "KEY=[%s] TOK=[%s]\\n" "${ARIA_X_API_KEY:-}" "${ARIA_X_AUTH_TOKEN:-}"')
+            self.assertTrue(sent.ok, sent.error)
+            self.assertIn("KEY=[] TOK=[]", sent.data["output"])
+
+    def test_mock_backend_refuses_session_without_spawning(self) -> None:
+        from aria_x.config import SandboxConfig
+        self.ctx.sandbox = build_sandbox(SandboxConfig(backend="mock"), self.work)
+        with mock.patch("aria_x.tools.session.subprocess.Popen") as popen_mock:
+            result = self.registry.execute("session_open", {"command": "bash --norc"}, self.ctx)
+        self.assertFalse(result.ok)
+        self.assertIn("mock", result.error.lower())
+        popen_mock.assert_not_called()
+
+    def test_session_cwd_honors_subdirectory(self) -> None:
+        sub = self.work / "subdir"
+        sub.mkdir()
+        result = self.registry.execute("session_open", {"command": "bash --norc", "cwd": "subdir"}, self.ctx)
+        self.assertTrue(result.ok, result.error)
+        sent = self.send(result.data["session_id"], "pwd")
+        self.assertTrue(sent.ok)
+        self.assertIn("subdir", sent.data["output"])
+
+    def test_docker_pty_cwd_client_env_and_cleanup(self) -> None:
+        from aria_x.config import SandboxConfig
+        sub = self.work / "subdir"
+        sub.mkdir()
+        cfg = SandboxConfig(backend="docker", docker_binary="/custom/docker", env={"TOOL_VAR": "1"})
+        self.ctx.sandbox = build_sandbox(cfg, self.work)
+        self.ctx.config.sandbox = cfg
+
+        fake_proc = mock.MagicMock()
+        fake_proc.pid = 424242
+        fake_proc.poll.return_value = None
+
+        with mock.patch.dict(os.environ, {
+            "DOCKER_HOST": "unix:///tmp/custom.sock",
+            "DOCKER_CONTEXT": "lab",
+            "ARIA_X_API_KEY": "sk-synthetic-000",
+            "ARIA_X_AUTH_TOKEN": "tok-synthetic",
+        }), \
+                mock.patch("aria_x.tools.session._pty.openpty", return_value=(100, 101)), \
+                mock.patch("aria_x.tools.session.os.close"), \
+                mock.patch("aria_x.tools.session.os.read", return_value=b""), \
+                mock.patch("aria_x.tools.session.os.write"), \
+                mock.patch("aria_x.tools.session.select.select", return_value=([], [], [])), \
+                mock.patch("aria_x.tools.session.subprocess.Popen", return_value=fake_proc) as popen_mock, \
+                mock.patch("aria_x.tools.session.subprocess.run") as run_mock:
+            res = self.registry.execute("session_open", {"command": "pwd", "cwd": "subdir"}, self.ctx)
+            self.assertTrue(res.ok, res.error)
+            argv = popen_mock.call_args[0][0]
+            env = popen_mock.call_args[1]["env"]
+            self.assertEqual(argv[0], "/custom/docker")
+            self.assertIn("-w", argv)
+            self.assertEqual(argv[argv.index("-w") + 1], "/work/subdir")
+            self.assertIn("-e", argv)
+            self.assertIn("TOOL_VAR=1", argv)
+            self.assertEqual(env.get("DOCKER_HOST"), "unix:///tmp/custom.sock")
+            self.assertEqual(env.get("DOCKER_CONTEXT"), "lab")
+            self.assertNotIn("ARIA_X_API_KEY", env)
+            self.assertNotIn("ARIA_X_AUTH_TOKEN", env)
+
+            close_res = self.registry.execute("session_close", {"session_id": res.data["session_id"]}, self.ctx)
+            self.assertTrue(close_res.ok, close_res.error)
+            run_mock.assert_called_once()
+            kill_argv = run_mock.call_args[0][0]
+            kill_env = run_mock.call_args[1]["env"]
+            self.assertEqual(kill_argv[0], "/custom/docker")
+            self.assertEqual(kill_argv[1], "kill")
+            self.assertEqual(kill_env.get("DOCKER_HOST"), "unix:///tmp/custom.sock")
+            self.assertEqual(kill_env.get("DOCKER_CONTEXT"), "lab")
+            self.assertNotIn("ARIA_X_API_KEY", kill_env)
+            self.assertNotIn("ARIA_X_AUTH_TOKEN", kill_env)
+
+            # Default cwd uses /work; escaping cwd is rejected
+            fake_proc2 = mock.MagicMock()
+            fake_proc2.pid = 424243
+            fake_proc2.poll.return_value = None
+            popen_mock.return_value = fake_proc2
+            res_root = self.registry.execute("session_open", {"command": "pwd"}, self.ctx)
+            self.assertTrue(res_root.ok, res_root.error)
+            argv_root = popen_mock.call_args[0][0]
+            self.assertEqual(argv_root[argv_root.index("-w") + 1], "/work")
+            self.registry.execute("session_close", {"session_id": res_root.data["session_id"]}, self.ctx)
+
+            res_escape = self.registry.execute("session_open", {"command": "pwd", "cwd": "../outside"}, self.ctx)
+            self.assertFalse(res_escape.ok)
 
 
 if __name__ == "__main__":

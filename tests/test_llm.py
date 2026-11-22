@@ -226,5 +226,70 @@ class RoleDetectionTests(unittest.TestCase):
         self.assertEqual(provider.chat(messages).content, "generic")
 
 
+class AnthropicConfigAndTimeoutTests(unittest.TestCase):
+    def test_anthropic_default_base_url_and_custom_auth_headers(self) -> None:
+        from aria_x.config import AriaXConfig, LLMConfig
+        from aria_x.errors import ConfigError
+
+        cfg_no_key = AriaXConfig(llm=LLMConfig(provider="anthropic"))
+        self.assertEqual(cfg_no_key.llm.resolved_base_url(), "https://api.anthropic.com")
+        with self.assertRaises(ConfigError):
+            cfg_no_key.validate()
+
+        cfg_header_auth = AriaXConfig(
+            llm=LLMConfig(provider="anthropic", extra_headers={"x-api-key": "custom-tok"})
+        )
+        cfg_header_auth.validate()
+
+        cfg_custom_gateway = AriaXConfig(
+            llm=LLMConfig(provider="anthropic", base_url="http://127.0.0.1:8000")
+        )
+        cfg_custom_gateway.validate()
+
+        for gateway_url in (
+            "https://gateway.internal/proxy/api.anthropic.com/v1",
+            "https://api.anthropic.com.corp-proxy/v1",
+        ):
+            AriaXConfig(llm=LLMConfig(provider="anthropic", base_url=gateway_url)).validate()
+        AriaXConfig(llm=LLMConfig(
+            provider="anthropic",
+            base_url="https://gateway.internal/v1",
+            extra_headers={"Authorization": "Basic dXNlcjpwYXNz"},
+        )).validate()
+
+        for bad_cfg in (
+            LLMConfig(provider="anthropic", api_key="   "),
+            LLMConfig(provider="anthropic", extra_headers={"x-api-key": ""}),
+            LLMConfig(provider="anthropic", extra_headers={"x-api-key": "   "}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": ""}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer   "}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Basic dXNlcjpwYXNz"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Token abc"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Digest xyz"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "raw-token"}),
+        ):
+            with self.assertRaises(ConfigError, msg=f"expected ConfigError for {bad_cfg}"):
+                AriaXConfig(llm=bad_cfg).validate()
+
+        for good_cfg in (
+            LLMConfig(provider="anthropic", api_key="sk-ant-test"),
+            LLMConfig(provider="anthropic", extra_headers={"x-api-key": "sk-ant-test"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer tok-test"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "bearer tok-test"}),
+        ):
+            AriaXConfig(llm=good_cfg).validate()
+
+    def test_anthropic_timeout_raises_retryable_llm_error(self) -> None:
+        from unittest import mock
+        from aria_x.llm.anthropic import AnthropicProvider
+
+        provider = AnthropicProvider(api_key="test-key", timeout=1.0)
+        with mock.patch("aria_x.llm.anthropic.urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            with self.assertRaises(LLMError) as ctx:
+                provider.chat([ChatMessage.user("hello")])
+        self.assertTrue(ctx.exception.details.get("retryable"))
+
+
 if __name__ == "__main__":
     unittest.main()

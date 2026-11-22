@@ -9,7 +9,18 @@
     poll: "aria-x.poll",
     tab: "aria-x.tab",
     project: "aria-x.project",
+    lang: "aria-x.lang",
   };
+
+  const I18N = typeof window !== "undefined" && window.ARIA_X_I18N ? window.ARIA_X_I18N : null;
+
+  function normalizeLang(raw) {
+    if (I18N && typeof I18N.normalizeLanguage === "function") return I18N.normalizeLanguage(raw);
+    const v = String(raw || "").trim().toLowerCase();
+    if (v === "zh" || v.startsWith("zh-cn") || v.startsWith("zh_cn") || v.startsWith("zh-hans")) return "zh-CN";
+    if (v === "ja" || v === "jp" || v.startsWith("ja-") || v.startsWith("ja_")) return "ja";
+    return "en";
+  }
 
   const EVENT_TYPES = [
     "run.started", "run.finished", "run.failed", "run.paused", "run.resumed",
@@ -40,6 +51,7 @@
     token: localStorage.getItem(STORAGE.token) || "",
     pollMs: Number(localStorage.getItem(STORAGE.poll)) || 3000,
     tab: localStorage.getItem(STORAGE.tab) || "overview",
+    lang: normalizeLang(localStorage.getItem(STORAGE.lang)),
     config: null,
     projects: [],
     projectId: localStorage.getItem(STORAGE.project) || "",
@@ -61,15 +73,80 @@
     timelinePaused: false,
     timelineFilter: "",
     timelineType: "",
+    sseConnected: false,
     es: null,
     pollTimer: null,
     refreshing: false,
+    refreshSeq: 0,
     graphRefreshTimer: null,
+    graphSeq: 0,
     authWarned: false,
     reportHtml: "",
     reportMd: "",
+    reportMeta: { kind: "initial", run: null },
+    reportSeq: 0,
     blobUrls: [],
   };
+
+  function t(key, vars) {
+    if (I18N && typeof I18N.t === "function") return I18N.t(key, vars, state.lang);
+    let text = String(key || "");
+    if (vars && typeof vars === "object") {
+      text = text.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, name) => (
+        Object.prototype.hasOwnProperty.call(vars, name) &&
+        vars[name] !== undefined &&
+        vars[name] !== null
+          ? String(vars[name])
+          : match
+      ));
+    }
+    return text;
+  }
+
+  function languageDisplayName(lang) {
+    const code = normalizeLang(lang);
+    if (code === "zh-CN") return "简体中文";
+    if (code === "ja") return "日本語";
+    return "English";
+  }
+
+  function labelFromMap(prefix, value, fallback) {
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw) return fallback !== undefined ? fallback : "—";
+    const key = `${prefix}.${raw}`;
+    const translated = t(key);
+    return translated === key ? String(value) : translated;
+  }
+
+  function labelStatus(status) { return labelFromMap("status", status, "—"); }
+  function labelSeverity(severity) { return labelFromMap("severity", severity, "info"); }
+  function labelRisk(risk) { return labelFromMap("severity", risk, "medium"); }
+  function labelNodeKind(kind) { return labelFromMap("kind", kind, "note"); }
+  function labelAssetKind(kind) { return labelFromMap("assetKind", kind, "artifact"); }
+  function labelGraphLayer(layerKey) { return labelFromMap("graph.layer", layerKey, String(layerKey || "").toUpperCase()); }
+
+  function applyStaticI18n() {
+    if (document.documentElement) document.documentElement.lang = state.lang;
+    document.title = t("meta.title");
+    for (const node of document.querySelectorAll("[data-i18n]")) {
+      const key = node.getAttribute("data-i18n");
+      if (key) node.textContent = t(key);
+    }
+    for (const node of document.querySelectorAll("[data-i18n-placeholder]")) {
+      const key = node.getAttribute("data-i18n-placeholder");
+      if (key) node.setAttribute("placeholder", t(key));
+    }
+    for (const node of document.querySelectorAll("[data-i18n-title]")) {
+      const key = node.getAttribute("data-i18n-title");
+      if (key) node.setAttribute("title", t(key));
+    }
+    for (const node of document.querySelectorAll("[data-i18n-aria-label]")) {
+      const key = node.getAttribute("data-i18n-aria-label");
+      if (key) node.setAttribute("aria-label", t(key));
+    }
+    const langSelect = $("language-select");
+    if (langSelect) langSelect.value = state.lang;
+  }
 
   // ---------------------------------------------------------------- helpers
 
@@ -215,7 +292,7 @@
   function noteAuthFailure() {
     if (state.authWarned) return;
     state.authWarned = true;
-    toast("Authentication required — add the Bearer token in Settings.", "warn", 6500);
+    toast(t("toast.authRequired"), "warn", 6500);
   }
 
   // ------------------------------------------------------------------- tabs
@@ -247,7 +324,7 @@
       panel.hidden = panel.id !== `panel-${name}`;
     }
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-    if (name === "graph") { ensureGraph().then(renderGraph).catch(() => {}); }
+    if (name === "graph") { ensureGraph().then((ok) => { if (ok) renderGraph(); }).catch(() => {}); }
     if (name === "report") { loadReport().catch(() => {}); }
     if (name === "settings") { loadSettings().catch(() => {}); }
     if (name === "timeline") { renderTimeline(); scrollTimeline(); }
@@ -284,7 +361,7 @@
       projects = await api("/api/projects");
     } catch (error) {
       projects = [];
-      if (error.status !== 401) toast(`Could not load projects: ${error.message}`, "bad");
+      if (error.status !== 401) toast(t("toast.loadProjectsFailed", { message: error.message }), "bad");
     }
     state.projects = Array.isArray(projects) ? projects : [];
     const select = $("project-select");
@@ -298,7 +375,7 @@
     if (!state.projects.length) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "No projects yet";
+      option.textContent = t("topbar.noProjects");
       select.appendChild(option);
       state.projectId = "";
       clearProject();
@@ -314,17 +391,26 @@
     localStorage.setItem(STORAGE.project, state.projectId);
     const select = $("project-select");
     if (select) select.value = state.projectId;
+    state.refreshSeq += 1;
+    state.refreshing = false;
     state.detail = null;
     state.graph = null;
     state.run = null;
+    state.findings = [];
+    state.assets = [];
+    state.todos = [];
+    state.approvals = [];
+    state.currentRunId = "";
     state.selectedNodeId = "";
     state.selectedFindingId = "";
     state.events = [];
     state.eventTypes = new Set();
     renderTimelineEvents();
+    resetReportView(state.projectId ? "initial" : "noProject");
+    resetGraphView();
     if (!state.projectId) { clearProject(); return; }
     connectSSE();
-    await refreshProject({ full: true });
+    await refreshProject({ full: true, force: true });
   }
 
   function clearProject() {
@@ -334,21 +420,27 @@
     $("project-goal").textContent = "—";
     $("run-id").textContent = "—";
     $("run-state").className = "chip idle";
-    $("run-state").textContent = "created";
-    setChip($("run-chip"), "idle", "idle");
+    $("run-state").textContent = labelStatus("created");
+    setChip($("run-chip"), "idle", labelStatus("idle"));
     $("btn-start").disabled = true;
     $("btn-stop").disabled = true;
-    $("approval-list").replaceChildren(el("p", "muted", "Select an engagement first."));
-    $("approval-count").textContent = "0 pending";
+    $("approval-list").replaceChildren(el("p", "muted", t("approvals.selectFirst")));
+    $("approval-count").textContent = t("approvals.pending", { count: 0 });
+    resetReportView("noProject");
+    resetGraphView();
     if (state.es) { state.es.close(); state.es = null; }
     setSseStatus(false);
   }
 
-  async function refreshProject({ full = false } = {}) {
-    if (!state.projectId || state.refreshing) return;
+  async function refreshProject({ full = false, force = false } = {}) {
+    if (!state.projectId) return;
+    if (state.refreshing && !force) return;
+    const projectId = state.projectId;
+    const reqSeq = ++state.refreshSeq;
     state.refreshing = true;
     try {
-      const detail = await api(`/api/projects/${encodeURIComponent(state.projectId)}`);
+      const detail = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+      if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
       state.detail = detail;
       state.findings = Array.isArray(detail.findings) ? detail.findings : [];
       state.assets = Array.isArray(detail.assets) ? detail.assets : [];
@@ -362,31 +454,43 @@
         // and elapsed readout correct even if that second request is slow.
         state.run = { run: active, tasks: [], budget: active.budget || {}, usage: active.usage || {} };
         try {
-          const full = await api(`/api/runs/${encodeURIComponent(active.id)}`);
-          if (full) state.run = full;
+          const fullRun = await api(`/api/runs/${encodeURIComponent(active.id)}`);
+          if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+          if (fullRun) state.run = fullRun;
         } catch { /* keep the aggregate fallback */ }
       } else {
         state.currentRunId = "";
         state.run = null;
       }
+      if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
       try {
-        state.approvals = await api(`/api/approvals?project_id=${encodeURIComponent(state.projectId)}`);
-      } catch { state.approvals = []; }
+        const approvals = await api(`/api/approvals?project_id=${encodeURIComponent(projectId)}`);
+        if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+        state.approvals = approvals;
+      } catch {
+        if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+        state.approvals = [];
+      }
       renderOverview();
       renderFindings();
       renderAssets();
       renderTodos();
-      if (state.tab === "graph") { await ensureGraph(); renderGraph(); }
+      if (state.tab === "graph") {
+        const updated = await ensureGraph();
+        if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+        if (updated) renderGraph();
+      }
       if (full && state.tab === "report") { await loadReport(); }
     } catch (error) {
+      if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
       if (error.status === 404) {
-        toast("That engagement no longer exists.", "warn");
+        toast(t("toast.engagementMissing"), "warn");
         await loadProjects();
       } else if (error.status !== 401) {
-        toast(`Refresh failed: ${error.message}`, "bad");
+        toast(t("toast.refreshFailed", { message: error.message }), "bad");
       }
     } finally {
-      state.refreshing = false;
+      if (reqSeq === state.refreshSeq) state.refreshing = false;
     }
   }
 
@@ -395,9 +499,9 @@
   // --------------------------------------------------------------- overview
 
   function scopeSummary(scope) {
-    if (!scope || typeof scope !== "object") return "not declared";
+    if (!scope || typeof scope !== "object") return t("overview.scopeNotDeclared");
     const targets = Array.isArray(scope.targets) ? scope.targets : [];
-    if (!targets.length) return "no targets";
+    if (!targets.length) return t("overview.scopeNoTargets");
     return targets.join(", ");
   }
 
@@ -469,31 +573,32 @@
     const record = (state.run && state.run.run) || {};
 
     $("project-name").textContent = project.name || project.id;
-    $("project-goal").textContent = project.goal || "No goal recorded.";
-    setChip($("project-status"), project.status === "active" ? "ok" : "idle", project.status || "active");
+    $("project-goal").textContent = project.goal || t("overview.noGoal");
+    const projectStatus = project.status || "active";
+    setChip($("project-status"), project.status === "active" ? "ok" : "idle", labelStatus(projectStatus));
 
     const meta = $("project-meta");
     replace(meta, [
-      metaItem("Project ID", project.id),
-      metaItem("Created", fmtDateTime(project.created_at)),
-      metaItem("Scope", scopeSummary(project.scope)),
-      metaItem("Runs", String((detail.runs || []).length)),
+      metaItem(t("overview.metaProjectId"), project.id),
+      metaItem(t("overview.metaCreated"), fmtDateTime(project.created_at)),
+      metaItem(t("overview.metaScope"), scopeSummary(project.scope)),
+      metaItem(t("overview.metaRuns"), String((detail.runs || []).length)),
     ]);
 
     // stats -------------------------------------------------------------
     const severitySub = Object.entries(findingsBySeverity)
       .sort((a, b) => (SEVERITY_ORDER[a[0]] ?? 9) - (SEVERITY_ORDER[b[0]] ?? 9))
-      .map(([severity, value]) => `${value} ${severity}`)
-      .join(" · ");
+      .map(([severity, value]) => `${value} ${labelSeverity(severity)}`)
+      .join(t("overview.statFindingsSep"));
     replace($("overview-stats"), [
-      statCard("k-facts", "Facts", num(nodes.fact || 0), "observed truths"),
-      statCard("k-intents", "Intents", num(nodes.intent || 0), "open intent chain"),
-      statCard("k-findings", "Findings", num(findings), severitySub || "none yet"),
-      statCard("k-assets", "Assets", num(sumValues(assets)), `${Object.keys(assets).length} kinds`),
-      statCard("k-todos", "Todos", num(counts.todos || state.todos.length), "shared plan chain"),
-      statCard("k-traces", "Traces", num(counts.traces || 0), "process traces"),
-      statCard("k-tokens", "Tokens", num(budget.tokens || 0), "prompt + completion"),
-      statCard("k-tools", "Tool calls", num(budget.usage.tool_calls || 0), "tool invocations"),
+      statCard("k-facts", t("overview.statFacts"), num(nodes.fact || 0), t("overview.statFactsSub")),
+      statCard("k-intents", t("overview.statIntents"), num(nodes.intent || 0), t("overview.statIntentsSub")),
+      statCard("k-findings", t("overview.statFindings"), num(findings), severitySub || t("overview.statFindingsNone")),
+      statCard("k-assets", t("overview.statAssets"), num(sumValues(assets)), t("overview.statAssetsKinds", { count: Object.keys(assets).length })),
+      statCard("k-todos", t("overview.statTodos"), num(counts.todos || state.todos.length), t("overview.statTodosSub")),
+      statCard("k-traces", t("overview.statTraces"), num(counts.traces || 0), t("overview.statTracesSub")),
+      statCard("k-tokens", t("overview.statTokens"), num(budget.tokens || 0), t("overview.statTokensSub")),
+      statCard("k-tools", t("overview.statTools"), num(budget.usage.tool_calls || 0), t("overview.statToolsSub")),
     ]);
 
     renderRun(budget);
@@ -505,15 +610,16 @@
     const record = (state.run && state.run.run) ||
       (state.detail && Array.isArray(state.detail.runs) ? state.detail.runs[0] : null) || null;
     const status = record ? record.status : "idle";
-    setChip($("run-state"), RUN_TONE[status] || "idle", status);
-    setChip($("run-chip"), RUN_TONE[status] || "idle", status);
+    setChip($("run-state"), RUN_TONE[status] || "idle", labelStatus(status));
+    setChip($("run-chip"), RUN_TONE[status] || "idle", labelStatus(status));
     $("run-id").textContent = record ? record.id : "—";
     $("run-elapsed").textContent = record ? fmtDuration(budget.elapsed) : "—";
     const running = Boolean(record && (record.status === "running" || record.status === "paused"));
     $("btn-start").disabled = running;
     $("btn-stop").disabled = !running;
     $("run-goal").placeholder = state.detail && state.detail.project
-      ? `Defaults to: ${state.detail.project.goal}` : "Defaults to the project goal…";
+      ? t("overview.runGoalPlaceholderWithGoal", { goal: state.detail.project.goal })
+      : t("overview.runGoalPlaceholder");
 
     const tasks = (state.run && Array.isArray(state.run.tasks)) ? state.run.tasks : [];
     const wrap = $("run-tasks-wrap");
@@ -521,7 +627,7 @@
     replace($("run-tasks"), tasks.slice(-20).map((task) => {
       const li = document.createElement("li");
       li.appendChild(el("span", "task-type", task.type || "task"));
-      li.appendChild(el("span", `task-status ${task.status || ""}`, task.status || "queued"));
+      li.appendChild(el("span", `task-status ${task.status || ""}`, labelStatus(task.status || "queued")));
       li.appendChild(el("span", null, task.agent || task.intent_id || task.id));
       return li;
     }));
@@ -548,34 +654,34 @@
   function renderBudget(budget) {
     const container = $("budget-bars");
     if (!budget.hasData) {
-      replace(container, [el("p", "muted", "No budget data yet — start a run.")]);
+      replace(container, [el("p", "muted", t("budget.empty"))]);
       return;
     }
     const limits = budget.limits || {};
     const usage = budget.usage || {};
     const rows = [];
     if (limits.max_seconds) {
-      rows.push(budgetBar("Elapsed time", budget.elapsed || 0, limits.max_seconds,
+      rows.push(budgetBar(t("budget.elapsedTime"), budget.elapsed || 0, limits.max_seconds,
         `${fmtDuration(budget.elapsed || 0)} / ${fmtDuration(limits.max_seconds)}`, "cyan"));
     }
     if (limits.max_llm_calls) {
-      rows.push(budgetBar("LLM calls", usage.llm_calls || 0, limits.max_llm_calls,
+      rows.push(budgetBar(t("budget.llmCalls"), usage.llm_calls || 0, limits.max_llm_calls,
         `${num(usage.llm_calls || 0)} / ${num(limits.max_llm_calls)}`));
     }
     if (limits.max_tokens) {
-      rows.push(budgetBar("Tokens", budget.tokens || 0, limits.max_tokens,
+      rows.push(budgetBar(t("budget.tokens"), budget.tokens || 0, limits.max_tokens,
         `${num(budget.tokens || 0)} / ${num(limits.max_tokens)}`));
     }
     if (limits.max_tool_calls) {
-      rows.push(budgetBar("Tool calls", usage.tool_calls || 0, limits.max_tool_calls,
+      rows.push(budgetBar(t("budget.toolCalls"), usage.tool_calls || 0, limits.max_tool_calls,
         `${num(usage.tool_calls || 0)} / ${num(limits.max_tool_calls)}`, "cyan"));
     }
     if (limits.max_total_intents) {
-      rows.push(budgetBar("Intents", budget.intents || usage.intents_started || 0, limits.max_total_intents,
+      rows.push(budgetBar(t("budget.intents"), budget.intents || usage.intents_started || 0, limits.max_total_intents,
         `${num(budget.intents || 0)} / ${num(limits.max_total_intents)}`, "cyan"));
     }
     if (!rows.length) {
-      rows.push(el("p", "muted", "Budget limits are not published for this run."));
+      rows.push(el("p", "muted", t("budget.notPublished")));
     }
     replace(container, rows);
   }
@@ -586,10 +692,10 @@
     const list = $("approval-list");
     const approvals = Array.isArray(state.approvals) ? state.approvals : [];
     const badge = $("approval-count");
-    badge.textContent = `${approvals.length} pending`;
+    badge.textContent = t("approvals.pending", { count: approvals.length });
     badge.className = `chip ${approvals.length ? "warn" : "idle"}`;
     if (!approvals.length) {
-      replace(list, [el("p", "muted", "No approvals waiting. Risky actions appear here.")]);
+      replace(list, [el("p", "muted", t("approvals.empty"))]);
       return;
     }
     replace(list, approvals.map((approval) => {
@@ -597,17 +703,17 @@
       const head = el("div", "approval-head");
       head.appendChild(el("span", "approval-tool", approval.tool || "tool"));
       head.appendChild(el("span", `chip ${approval.risk === "critical" || approval.risk === "high" ? "bad" : "warn"}`,
-        approval.risk || "medium"));
+        labelRisk(approval.risk || "medium")));
       head.appendChild(el("span", "approval-meta", `${approval.task_id || "task"} · ${fmtClock(approval.created_at)}`));
       card.appendChild(head);
       if (approval.reason) card.appendChild(el("p", "approval-meta", approval.reason));
       const args = el("pre", "approval-args", JSON.stringify(approval.args || {}, null, 2));
       card.appendChild(args);
       const actions = el("div", "approval-actions");
-      const approve = el("button", "btn primary small", "Approve");
+      const approve = el("button", "btn primary small", t("approvals.approve"));
       approve.type = "button";
       approve.addEventListener("click", () => decideApproval(approval.id, true, approve));
-      const deny = el("button", "btn danger small", "Deny");
+      const deny = el("button", "btn danger small", t("approvals.deny"));
       deny.type = "button";
       deny.addEventListener("click", () => decideApproval(approval.id, false, deny));
       actions.append(approve, deny);
@@ -621,10 +727,10 @@
     try {
       await api(`/api/approvals/${encodeURIComponent(approvalId)}`,
         { method: "POST", body: { approved, reason: "" } });
-      toast(approved ? "Approval granted." : "Approval denied.", approved ? "ok" : "warn");
+      toast(approved ? t("approvals.granted") : t("approvals.denied"), approved ? "ok" : "warn");
       await refreshProject();
     } catch (error) {
-      toast(`Approval failed: ${error.message}`, "bad");
+      toast(t("approvals.failed", { message: error.message }), "bad");
     } finally {
       if (button) button.disabled = false;
     }
@@ -633,7 +739,7 @@
   // ---------------------------------------------------------------- run ops
 
   async function startRun() {
-    if (!state.projectId) { toast("Select or create an engagement first.", "warn"); return; }
+    if (!state.projectId) { toast(t("toast.selectEngagementFirst"), "warn"); return; }
     const button = $("btn-start");
     button.disabled = true;
     const goal = $("run-goal").value.trim();
@@ -641,46 +747,46 @@
       const body = goal ? { goal } : {};
       const result = await api(`/api/projects/${encodeURIComponent(state.projectId)}/runs`,
         { method: "POST", body });
-      toast(`Run ${result.run_id} started.`);
+      toast(t("toast.runStarted", { runId: result.run_id }));
       $("run-goal").value = "";
       await refreshProject();
       connectSSE();
     } catch (error) {
-      toast(`Could not start run: ${error.message}`, "bad");
+      toast(t("toast.runStartFailed", { message: error.message }), "bad");
       button.disabled = false;
     }
   }
 
   async function stopRun() {
-    if (!state.currentRunId) { toast("No run to stop.", "warn"); return; }
+    if (!state.currentRunId) { toast(t("toast.noRunToStop"), "warn"); return; }
     const button = $("btn-stop");
     button.disabled = true;
     try {
       await api(`/api/runs/${encodeURIComponent(state.currentRunId)}/stop`, { method: "POST", body: {} });
-      toast("Stop requested.", "warn");
+      toast(t("toast.stopRequested"), "warn");
       await refreshProject();
     } catch (error) {
-      toast(`Could not stop run: ${error.message}`, "bad");
+      toast(t("toast.stopFailed", { message: error.message }), "bad");
       button.disabled = false;
     }
   }
 
   async function submitHint(event) {
     event.preventDefault();
-    if (!state.projectId) { toast("Select an engagement first.", "warn"); return; }
+    if (!state.projectId) { toast(t("toast.selectEngagement"), "warn"); return; }
     const input = $("hint-input");
     const content = input.value.trim();
-    if (!content) { toast("Write a hint first.", "warn"); return; }
+    if (!content) { toast(t("toast.writeHintFirst"), "warn"); return; }
     const button = $("hint-submit");
     button.disabled = true;
     try {
       await api(`/api/projects/${encodeURIComponent(state.projectId)}/hints`,
         { method: "POST", body: { content } });
       input.value = "";
-      toast("Hint recorded.");
+      toast(t("toast.hintRecorded"));
       await refreshProject();
     } catch (error) {
-      toast(`Hint failed: ${error.message}`, "bad");
+      toast(t("toast.hintFailed", { message: error.message }), "bad");
     } finally {
       button.disabled = false;
     }
@@ -689,15 +795,15 @@
   async function createProject(event) {
     event.preventDefault();
     if (!$("new-authorized").checked) {
-      toast("Confirm that you are authorized to test these targets.", "warn");
+      toast(t("toast.confirmAuthorized"), "warn");
       $("new-authorized").focus();
       return;
     }
     const name = $("new-name").value.trim();
     const goal = $("new-goal").value.trim();
     const targets = $("new-targets").value.split(",").map((item) => item.trim()).filter(Boolean);
-    if (!name || !goal) { toast("Name and goal are required.", "warn"); return; }
-    if (!targets.length) { toast("Add at least one authorized target.", "warn"); $("new-targets").focus(); return; }
+    if (!name || !goal) { toast(t("toast.nameGoalRequired"), "warn"); return; }
+    if (!targets.length) { toast(t("toast.targetRequired"), "warn"); $("new-targets").focus(); return; }
     try {
       const project = await api("/api/projects", {
         method: "POST",
@@ -706,12 +812,12 @@
           scope: { authorized: true, targets, deny: [], allow_private: true, allow_loopback: true },
         },
       });
-      toast(`Engagement “${project.name}” created.`);
+      toast(t("toast.engagementCreated", { name: project.name }));
       $("create-form").reset();
       $("new-authorized").checked = true;
       await loadProjects(project.id);
     } catch (error) {
-      toast(`Could not create engagement: ${error.message}`, "bad");
+      toast(t("toast.engagementCreateFailed", { message: error.message }), "bad");
     }
   }
 
@@ -741,14 +847,14 @@
       row.setAttribute("aria-selected", node.id === state.selectedFindingId ? "true" : "false");
       const severity = severityClass(meta.severity);
       const sevCell = document.createElement("td");
-      sevCell.appendChild(el("span", `sev sev-${severity}`, severity));
+      sevCell.appendChild(el("span", `sev sev-${severity}`, labelSeverity(severity)));
       row.appendChild(sevCell);
-      const titleCell = el("td", "title-cell", node.title || "(untitled finding)");
+      const titleCell = el("td", "title-cell", node.title || t("findings.untitled"));
       row.appendChild(titleCell);
       const confidence = document.createElement("td");
       confidence.appendChild(el("span", "mono", meta.confidence || "—"));
       row.appendChild(confidence);
-      row.appendChild(el("td", null, node.status || "—"));
+      row.appendChild(el("td", null, node.status ? labelStatus(node.status) : "—"));
       const created = document.createElement("td");
       created.appendChild(el("span", "mono", fmtDateTime(node.created_at)));
       row.appendChild(created);
@@ -783,29 +889,29 @@
   function renderFindingDetail(node) {
     const pane = $("finding-detail");
     if (!node) {
-      replace(pane, [el("p", "muted", "Select a finding row to view its body and evidence anchors.")]);
+      replace(pane, [el("p", "muted", t("findings.selectPrompt"))]);
       return;
     }
     const meta = node.meta || {};
     const severity = severityClass(meta.severity);
     const head = el("div", "detail-meta");
-    head.appendChild(el("span", `sev sev-${severity}`, severity));
-    head.appendChild(el("span", null, `status: ${node.status || "—"}`));
-    head.appendChild(el("span", null, `confidence: ${meta.confidence || "—"}`));
-    if (meta.cvss !== undefined && meta.cvss !== null) head.appendChild(el("span", null, `CVSS: ${meta.cvss}`));
+    head.appendChild(el("span", `sev sev-${severity}`, labelSeverity(severity)));
+    head.appendChild(el("span", null, t("graph.nodeStatus", { status: node.status ? labelStatus(node.status) : "—" })));
+    head.appendChild(el("span", null, t("graph.nodeConfidence", { confidence: meta.confidence || "—" })));
+    if (meta.cvss !== undefined && meta.cvss !== null) head.appendChild(el("span", null, t("graph.nodeCvss", { cvss: meta.cvss })));
     const children = [
-      el("h3", null, node.title || "(untitled finding)"),
+      el("h3", null, node.title || t("findings.untitled")),
       head,
-      el("div", "body-text", node.body || "No body recorded."),
+      el("div", "body-text", node.body || t("graph.noBody")),
     ];
     const metaKeys = Object.keys(meta).filter((key) => !["severity", "confidence", "cvss"].includes(key));
     if (metaKeys.length) {
       const block = el("details", "detail-meta");
-      block.appendChild(el("summary", null, "metadata"));
+      block.appendChild(el("summary", null, t("findings.metadata")));
       block.appendChild(el("pre", "code-block", JSON.stringify(meta, null, 2)));
       children.push(block);
     }
-    children.push(el("p", "detail-meta", `node ${node.id} · created ${fmtDateTime(node.created_at)}`));
+    children.push(el("p", "detail-meta", t("findings.detailMeta", { id: node.id, created: fmtDateTime(node.created_at) })));
     replace(pane, children);
   }
 
@@ -825,7 +931,7 @@
       const row = document.createElement("tr");
       row.title = asset.id ? `id: ${asset.id}` : "";
       const kindCell = document.createElement("td");
-      kindCell.appendChild(el("span", "chip", asset.kind || "asset"));
+      kindCell.appendChild(el("span", "chip", asset.kind ? labelAssetKind(asset.kind) : labelAssetKind("artifact")));
       row.appendChild(kindCell);
       const valueCell = el("td", "title-cell", asset.value || "—");
       valueCell.style.fontFamily = "var(--mono)";
@@ -850,12 +956,12 @@
     replace($("todos-list"), todos.map((todo) => {
       const item = el("li", "todo");
       item.appendChild(el("span", "todo-pos", `#${String(todo.position || 0).padStart(2, "0")}`));
-      item.appendChild(el("span", `todo-status ${todo.status || "pending"}`, todo.status || "pending"));
+      item.appendChild(el("span", `todo-status ${todo.status || "pending"}`, labelStatus(todo.status || "pending")));
       const text = document.createElement("div");
-      text.appendChild(el("div", "todo-title", todo.title || "(untitled)"));
+      text.appendChild(el("div", "todo-title", todo.title || t("todos.untitled")));
       if (todo.detail) text.appendChild(el("div", "todo-detail", todo.detail));
       if (Array.isArray(todo.depends_on) && todo.depends_on.length) {
-        text.appendChild(el("div", "todo-deps", `depends on: ${todo.depends_on.join(", ")}`));
+        text.appendChild(el("div", "todo-deps", t("todos.dependsOn", { deps: todo.depends_on.join(", ") })));
       }
       item.appendChild(text);
       return item;
@@ -865,21 +971,40 @@
 
   // ------------------------------------------------------------------- graph
 
+  function resetGraphView() {
+    state.graphSeq += 1;
+    if (state.graphRefreshTimer) {
+      window.clearTimeout(state.graphRefreshTimer);
+      state.graphRefreshTimer = null;
+    }
+    state.graph = null;
+    state.selectedNodeId = "";
+    renderGraph();
+  }
+
   async function ensureGraph() {
-    if (!state.projectId) return;
+    const projectId = state.projectId;
+    const reqSeq = ++state.graphSeq;
+    const isCurrent = () => reqSeq === state.graphSeq && projectId === state.projectId;
+    if (!projectId) return false;
     try {
-      state.graph = await api(`/api/projects/${encodeURIComponent(state.projectId)}/graph`);
+      const graph = await api(`/api/projects/${encodeURIComponent(projectId)}/graph`);
+      if (!isCurrent()) return false;
+      state.graph = graph;
+      return true;
     } catch (error) {
-      if (error.status !== 401) toast(`Graph unavailable: ${error.message}`, "bad");
+      if (!isCurrent()) return false;
+      if (error.status !== 401) toast(t("toast.graphUnavailable", { message: error.message }), "bad");
+      return false;
     }
   }
 
   const GRAPH_LAYERS = [
-    { kinds: ["goal"], label: "GOAL" },
-    { kinds: ["intent"], label: "INTENT" },
-    { kinds: ["fact"], label: "FACT" },
-    { kinds: ["finding"], label: "FINDING" },
-    { kinds: ["hint", "note", "guide"], label: "CONTEXT" },
+    { kinds: ["goal"], key: "goal" },
+    { kinds: ["intent"], key: "intent" },
+    { kinds: ["fact"], key: "fact" },
+    { kinds: ["finding"], key: "finding" },
+    { kinds: ["hint", "note", "guide"], key: "context" },
   ];
 
   function graphLayerFor(kind) {
@@ -914,7 +1039,7 @@
       const rows = Math.ceil(items.length / perRow);
       const bandTop = y;
       const bandHeight = rows * rowHeight + bandPadding;
-      layerLabels.push({ label: GRAPH_LAYERS[index].label, y: bandTop + bandHeight / 2, top: bandTop });
+      layerLabels.push({ label: labelGraphLayer(GRAPH_LAYERS[index].key), y: bandTop + bandHeight / 2, top: bandTop });
       for (let row = 0; row < rows; row += 1) {
         const rowItems = items.slice(row * perRow, (row + 1) * perRow);
         const spacing = rowItems.length > 1 ? (right - left) / (rowItems.length - 1) : 0;
@@ -939,13 +1064,17 @@
     const nodes = (graph && Array.isArray(graph.nodes)) ? graph.nodes : [];
     const edges = (graph && Array.isArray(graph.edges)) ? graph.edges : [];
     const assets = (graph && Array.isArray(graph.assets)) ? graph.assets : [];
-    $("graph-count").textContent = `${nodes.length} nodes · ${edges.length} edges · ${assets.length} assets`;
+    $("graph-count").textContent = t("graph.counts", {
+      nodes: nodes.length,
+      edges: edges.length,
+      assets: assets.length,
+    });
     if (!nodes.length) {
       // SVGElement does not reflect the HTMLElement .hidden IDL property, so
       // toggle the attribute explicitly (otherwise the graph stays display:none).
       svg.setAttribute("hidden", "");
       empty.hidden = false;
-      replace($("graph-detail"), [el("p", "muted", "Select a node to inspect its fact, intent, hint or finding.")]);
+      replace($("graph-detail"), [el("p", "muted", t("graph.selectPrompt"))]);
       return;
     }
     empty.hidden = true;
@@ -1045,7 +1174,7 @@
       const item = el("span", "legend-item");
       const swatch = el("span", "legend-swatch");
       swatch.style.background = KIND_STYLE[kind].color;
-      item.append(swatch, el("span", null, kind));
+      item.append(swatch, el("span", null, labelNodeKind(kind)));
       return item;
     }));
   }
@@ -1063,28 +1192,30 @@
   function renderNodeDetail(node, graph) {
     const pane = $("graph-detail");
     if (!node) {
-      replace(pane, [el("p", "muted", "Select a node to inspect its fact, intent, hint or finding.")]);
+      replace(pane, [el("p", "muted", t("graph.selectPrompt"))]);
       return;
     }
     const meta = node.meta || {};
     const children = [];
     const kind = KIND_STYLE[node.kind] ? node.kind : "note";
-    const kindChip = el("span", "chip", node.kind || "note");
+    const kindChip = el("span", "chip", labelNodeKind(node.kind || "note"));
     kindChip.style.borderColor = KIND_STYLE[kind].color;
     kindChip.style.color = KIND_STYLE[kind].color;
     const metaRow = el("div", "detail-meta");
     metaRow.appendChild(kindChip);
-    metaRow.appendChild(el("span", null, `status: ${node.status || "open"}`));
-    if (meta.severity) metaRow.appendChild(el("span", `sev sev-${severityClass(meta.severity)}`, meta.severity));
-    children.push(el("h3", null, node.title || "(untitled node)"));
+    metaRow.appendChild(el("span", null, t("graph.nodeStatus", { status: labelStatus(node.status || "open") })));
+    if (meta.severity) metaRow.appendChild(el("span", `sev sev-${severityClass(meta.severity)}`, labelSeverity(meta.severity)));
+    children.push(el("h3", null, node.title || t("graph.untitledNode")));
     children.push(metaRow);
-    children.push(el("div", "body-text", node.body || "No body recorded."));
+    children.push(el("div", "body-text", node.body || t("graph.noBody")));
     if (meta.confidence || meta.cvss) {
       children.push(el("p", "detail-meta",
-        [meta.confidence ? `confidence: ${meta.confidence}` : "", meta.cvss ? `CVSS: ${meta.cvss}` : ""]
-          .filter(Boolean).join(" · ")));
+        [
+          meta.confidence ? t("graph.nodeConfidence", { confidence: meta.confidence }) : "",
+          meta.cvss ? t("graph.nodeCvss", { cvss: meta.cvss }) : "",
+        ].filter(Boolean).join(" · ")));
     }
-    children.push(el("p", "detail-meta", `node ${node.id} · seq ${node.seq ?? "—"}`));
+    children.push(el("p", "detail-meta", t("graph.nodeMeta", { id: node.id, seq: node.seq ?? "—" })));
 
     const edges = (graph && graph.edges) || [];
     const nodes = (graph && graph.nodes) || [];
@@ -1099,7 +1230,7 @@
     }
     if (neighbors.length) {
       const box = el("div", "graph-nbr");
-      box.appendChild(el("div", "stat-label", "Connections"));
+      box.appendChild(el("div", "stat-label", t("graph.connections")));
       for (const neighbor of neighbors.slice(0, 12)) {
         const button = el("button", null, `${neighbor.dir} ${neighbor.rel || "related"}: ${neighbor.node.title || neighbor.node.id}`);
         button.type = "button";
@@ -1139,9 +1270,9 @@
     row.appendChild(el("span", "tl-time", fmtClock(item.ts)));
     row.appendChild(el("span", `tl-type type-${String(item.type).replace(/\./g, "\\.")}`, item.type || "event"));
     const message = el("div", "tl-message");
-    message.appendChild(el("div", null, summarizeEvent(item) || "(no payload)"));
+    message.appendChild(el("div", null, summarizeEvent(item) || t("timeline.noPayload")));
     const details = document.createElement("details");
-    details.appendChild(el("summary", null, "data"));
+    details.appendChild(el("summary", null, t("timeline.dataSummary")));
     let pretty;
     try { pretty = JSON.stringify(item.data, null, 2); } catch { pretty = String(item.data); }
     details.appendChild(el("pre", null, pretty));
@@ -1182,12 +1313,12 @@
 
   function updateTypeSelect() {
     const select = $("timeline-type");
-    const current = select.value;
+    const current = state.timelineType || select.value;
     const types = Array.from(state.eventTypes).sort();
     replace(select, [(() => {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "All types";
+      option.textContent = t("timeline.allTypes");
       return option;
     })(), ...types.map((type) => {
       const option = document.createElement("option");
@@ -1226,9 +1357,12 @@
         type.startsWith("approval.") || type === "hint" || type === "budget") {
       debouncedRefresh();
       if (state.tab === "graph") {
+        const scheduledProject = state.projectId;
         window.clearTimeout(state.graphRefreshTimer);
         state.graphRefreshTimer = window.setTimeout(() => {
-          ensureGraph().then(renderGraph).catch(() => {});
+          state.graphRefreshTimer = null;
+          if (!scheduledProject || state.projectId !== scheduledProject || state.tab !== "graph") return;
+          ensureGraph().then((ok) => { if (ok) renderGraph(); }).catch(() => {});
         }, 700);
       }
     }
@@ -1238,19 +1372,20 @@
   }
 
   function setSseStatus(connected) {
+    state.sseConnected = Boolean(connected);
     const pill = $("conn-pill");
     const text = $("conn-text");
     pill.classList.remove("ok", "bad", "idle", "live", "warn");
-    if (connected) {
+    if (state.sseConnected) {
       pill.classList.add("live");
-      text.textContent = "live";
-      $("sse-status").textContent = "stream live";
+      text.textContent = labelStatus("live");
+      $("sse-status").textContent = t("timeline.streamLive");
     } else {
       pill.classList.add("idle");
-      text.textContent = "offline";
-      $("sse-status").textContent = "stream offline";
+      text.textContent = labelStatus("offline");
+      $("sse-status").textContent = t("timeline.streamOffline");
     }
-    $("timeline-pulse").classList.toggle("on", Boolean(connected));
+    $("timeline-pulse").classList.toggle("on", state.sseConnected);
   }
 
   function connectSSE() {
@@ -1318,44 +1453,101 @@
     return String(markdown || "").replace(/^\uFEFF?\s*#\s+[^\r\n]+(?:\r?\n)+/, "");
   }
 
+  function renderReportMeta() {
+    const metaNode = $("report-meta");
+    if (!metaNode) return;
+    const info = state.reportMeta || { kind: "initial", run: null };
+    const run = info.run || null;
+    if (info.kind === "noProject") {
+      metaNode.textContent = t("report.metaNoProject");
+    } else if (info.kind === "html" && run) {
+      metaNode.textContent = t("report.metaRunHtml", {
+        runId: run.id,
+        status: labelStatus(run.status || "unknown"),
+        time: fmtDateTime(run.ended_at || run.started_at),
+      });
+    } else if (info.kind === "mdOnly" && run) {
+      metaNode.textContent = t("report.metaRunMdOnly", {
+        runId: run.id,
+        status: labelStatus(run.status || "unknown"),
+      });
+    } else if (info.kind === "legacyMd") {
+      metaNode.textContent = t("report.metaLegacyMd");
+    } else if (info.kind === "empty") {
+      metaNode.textContent = t("report.metaEmpty");
+    } else {
+      metaNode.textContent = t("report.metaInitial");
+    }
+  }
+
+  function resetReportView(metaKind = "empty", { invalidate = true } = {}) {
+    if (invalidate) state.reportSeq += 1;
+    revokeBlobUrls();
+    state.reportHtml = "";
+    state.reportMd = "";
+    state.reportMeta = { kind: metaKind, run: null };
+    const frame = $("report-frame");
+    const empty = $("report-empty");
+    if (frame) {
+      frame.hidden = true;
+      frame.removeAttribute("srcdoc");
+    }
+    if (empty) empty.hidden = false;
+    renderReportMeta();
+    setReportLinks(null, null);
+  }
+
   async function loadReport() {
-    if (!state.projectId) {
-      $("report-empty").hidden = false;
-      $("report-frame").hidden = true;
-      $("report-meta").textContent = "No engagement selected";
+    const projectId = state.projectId;
+    const reqSeq = ++state.reportSeq;
+    const isCurrent = () => reqSeq === state.reportSeq && projectId === state.projectId;
+
+    if (!projectId) {
+      resetReportView("noProject", { invalidate: false });
       return;
     }
     const frame = $("report-frame");
     const empty = $("report-empty");
-    // Deep-linking to #report can happen before any project detail exists.
-    if (!state.detail) {
-      await refreshProject();
-    }
-    let runs = ((state.detail && state.detail.runs) || []).slice();
+    let detailForProject =
+      state.detail && state.detail.project && state.detail.project.id === projectId
+        ? state.detail
+        : null;
+    let runs = (detailForProject && Array.isArray(detailForProject.runs))
+      ? detailForProject.runs.slice()
+      : [];
     if (!runs.length) {
       try {
-        const detail = await api(`/api/projects/${encodeURIComponent(state.projectId)}`);
+        const detail = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+        if (!isCurrent()) return;
         state.detail = detail;
         runs = Array.isArray(detail.runs) ? detail.runs.slice() : [];
-      } catch { runs = []; }
+      } catch {
+        if (!isCurrent()) return;
+        runs = [];
+      }
     }
     // Prefer completed runs with reports, newest first.
     runs.sort((a, b) => String(b.started_at || "").localeCompare(String(a.started_at || "")));
-    revokeBlobUrls();
     for (const run of runs.slice(0, 15)) {
-      const result = await fetchRaw(`/api/report/${encodeURIComponent(run.id)}`);
+      const [result, md] = await Promise.all([
+        fetchRaw(`/api/report/${encodeURIComponent(run.id)}`),
+        fetchRaw(`/api/report/${encodeURIComponent(run.id)}?format=md`),
+      ]);
+      if (!isCurrent()) return;
       if (result.ok && result.text.trim()) {
         const cleaned = stripReportDuplicateHeading(result.text);
+        revokeBlobUrls();
         state.reportHtml = cleaned;
+        state.reportMd = "";
         frame.srcdoc = cleaned;
         frame.hidden = false;
         empty.hidden = true;
-        $("report-meta").textContent = `Run ${run.id} · ${run.status || "unknown"} · ${fmtDateTime(run.ended_at || run.started_at)}`;
+        state.reportMeta = { kind: "html", run };
+        renderReportMeta();
         const htmlUrl = URL.createObjectURL(new Blob([cleaned], { type: "text/html" }));
         state.blobUrls.push(htmlUrl);
         let markdownUrl = null;
-        const md = await fetchRaw(`/api/projects/${encodeURIComponent(state.projectId)}/report`);
-        if (md.ok && md.text) {
+        if (md.ok && md.text.trim()) {
           state.reportMd = md.text;
           markdownUrl = URL.createObjectURL(new Blob([md.text], { type: "text/markdown" }));
           state.blobUrls.push(markdownUrl);
@@ -1363,28 +1555,48 @@
         setReportLinks(htmlUrl, markdownUrl);
         return;
       }
+      if (md.ok && md.text.trim()) {
+        const markdownBody = stripLeadingMarkdownHeading(md.text);
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>ARIA-X report</title>` +
+          `<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:36px auto;padding:0 20px;line-height:1.6;color:#1b2733;background:#fff}pre{white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:8px;font-size:13px}</style>` +
+          `</head><body><pre>${escapeHtml(markdownBody)}</pre></body></html>`;
+        revokeBlobUrls();
+        state.reportHtml = "";
+        state.reportMd = md.text;
+        frame.srcdoc = html;
+        frame.hidden = false;
+        empty.hidden = true;
+        state.reportMeta = { kind: "mdOnly", run };
+        renderReportMeta();
+        const mdUrl = URL.createObjectURL(new Blob([md.text], { type: "text/markdown" }));
+        state.blobUrls.push(mdUrl);
+        setReportLinks(null, mdUrl);
+        return;
+      }
     }
-    // Fallback: markdown-only report (no HTML yet).
-    const md = await fetchRaw(`/api/projects/${encodeURIComponent(state.projectId)}/report`);
+    // Fallback: legacy project-level markdown report when no per-run report exists.
+    const md = await fetchRaw(`/api/projects/${encodeURIComponent(projectId)}/report`);
+    if (!isCurrent()) return;
     if (md.ok && md.text.trim()) {
       const markdownBody = stripLeadingMarkdownHeading(md.text);
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>ARIA-X report</title>` +
         `<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:36px auto;padding:0 20px;line-height:1.6;color:#1b2733;background:#fff}pre{white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:8px;font-size:13px}</style>` +
         `</head><body><pre>${escapeHtml(markdownBody)}</pre></body></html>`;
+      revokeBlobUrls();
+      state.reportHtml = "";
+      state.reportMd = md.text;
       frame.srcdoc = html;
       frame.hidden = false;
       empty.hidden = true;
-      $("report-meta").textContent = "Markdown report (HTML pending)";
+      state.reportMeta = { kind: "legacyMd", run: null };
+      renderReportMeta();
       const mdUrl = URL.createObjectURL(new Blob([md.text], { type: "text/markdown" }));
       state.blobUrls.push(mdUrl);
       setReportLinks(null, mdUrl);
       return;
     }
-    frame.hidden = true;
-    frame.removeAttribute("srcdoc");
-    empty.hidden = false;
-    $("report-meta").textContent = "No report generated yet";
-    setReportLinks(null, null);
+    if (!isCurrent()) return;
+    resetReportView("empty", { invalidate: false });
   }
 
   // ---------------------------------------------------------------- settings
@@ -1400,22 +1612,18 @@
 
     const scope = config.scope_summary || (config.scope ? config.scope : {});
     const rows = [
-      ["Authorized", scope.authorized ? "yes" : "no"],
-      ["Targets", (scope.targets || []).join(", ") || "none"],
-      ["Denied", (scope.deny || []).join(", ") || "none"],
-      ["Allow private", scope.allow_private ? "yes" : "no"],
-      ["Allow loopback", scope.allow_loopback ? "yes" : "no"],
-      ["Max RPS", scope.max_rps !== undefined ? String(scope.max_rps) : "—"],
+      [t("settings.scopeAuthorized"), scope.authorized ? t("common.yes") : t("common.no")],
+      [t("settings.scopeTargets"), (scope.targets || []).join(", ") || t("common.none")],
+      [t("settings.scopeDenied"), (scope.deny || []).join(", ") || t("common.none")],
+      [t("settings.scopeAllowPrivate"), scope.allow_private ? t("common.yes") : t("common.no")],
+      [t("settings.scopeAllowLoopback"), scope.allow_loopback ? t("common.yes") : t("common.no")],
+      [t("settings.scopeMaxRps"), scope.max_rps !== undefined ? String(scope.max_rps) : "—"],
     ];
     const dl = $("settings-scope");
     replace(dl, rows.flatMap(([key, value]) => {
       const dt = el("dt", null, key);
       const dd = document.createElement("dd");
-      if (key === "Targets" || key === "Denied") {
-        dd.textContent = value;
-      } else {
-        dd.textContent = value;
-      }
+      dd.textContent = value;
       return [dt, dd];
     }));
 
@@ -1425,8 +1633,8 @@
       const head = el("div", "tool-head");
       head.appendChild(el("span", "tool-name", tool.name || "tool"));
       const risk = tool.risk || "low";
-      head.appendChild(el("span", `tool-risk risk-${risk}`, risk));
-      if (tool.requires_scope) head.appendChild(el("span", "muted small", "scope"));
+      head.appendChild(el("span", `tool-risk risk-${risk}`, labelRisk(risk)));
+      if (tool.requires_scope) head.appendChild(el("span", "muted small", t("settings.toolScopeTag")));
       item.appendChild(head);
       if (tool.description) item.appendChild(el("div", "tool-desc", tool.description));
       return item;
@@ -1440,7 +1648,7 @@
       await loadConfig(true);
       renderSettings();
     } catch (error) {
-      if (error.status !== 401) toast(`Config unavailable: ${error.message}`, "bad");
+      if (error.status !== 401) toast(t("toast.configUnavailable", { message: error.message }), "bad");
     }
   }
 
@@ -1450,7 +1658,7 @@
     if (value) localStorage.setItem(STORAGE.token, value);
     else localStorage.removeItem(STORAGE.token);
     state.authWarned = false;
-    toast(value ? "Token saved." : "Token cleared.");
+    toast(value ? t("toast.tokenSaved") : t("toast.tokenCleared"));
     connectSSE();
     refreshProject().catch(() => {});
     loadConfig(true).catch(() => {});
@@ -1460,7 +1668,7 @@
     state.token = "";
     localStorage.removeItem(STORAGE.token);
     $("token-input").value = "";
-    toast("Token cleared.", "warn");
+    toast(t("toast.tokenCleared"), "warn");
     connectSSE();
     refreshProject().catch(() => {});
   }
@@ -1485,13 +1693,71 @@
     $("run-elapsed").textContent = fmtDuration((end - start) / 1000);
   }
 
+  function renderDynamicI18n() {
+    const projectSelect = $("project-select");
+    if (projectSelect && !state.projects.length && projectSelect.options && projectSelect.options.length) {
+      const first = projectSelect.options[0];
+      if (!first.value) first.textContent = t("topbar.noProjects");
+    }
+    setSseStatus(state.sseConnected);
+    const pauseButton = $("timeline-pause");
+    if (pauseButton) pauseButton.textContent = state.timelinePaused ? t("timeline.resume") : t("timeline.pause");
+    updateTypeSelect();
+    renderFindings();
+    renderAssets();
+    renderTodos();
+    renderTimeline();
+    renderReportMeta();
+    if (state.detail && state.detail.project) {
+      renderOverview();
+    } else {
+      const runState = $("run-state");
+      if (runState) {
+        runState.className = "chip idle";
+        runState.textContent = labelStatus("created");
+      }
+      setChip($("run-chip"), "idle", labelStatus("idle"));
+      const approvalCount = $("approval-count");
+      if (approvalCount) approvalCount.textContent = t("approvals.pending", { count: 0 });
+      const approvalList = $("approval-list");
+      if (approvalList) replace(approvalList, [el("p", "muted", t("approvals.selectFirst"))]);
+      const budgetBars = $("budget-bars");
+      if (budgetBars) replace(budgetBars, [el("p", "muted", t("budget.empty"))]);
+      const runGoal = $("run-goal");
+      if (runGoal) runGoal.placeholder = t("overview.runGoalPlaceholder");
+    }
+    if (state.graph) {
+      renderGraph();
+    } else {
+      const graphCount = $("graph-count");
+      if (graphCount) graphCount.textContent = t("graph.noNodes");
+      const graphDetail = $("graph-detail");
+      if (graphDetail) replace(graphDetail, [el("p", "muted", t("graph.selectPrompt"))]);
+    }
+    if (state.config) {
+      renderSettings();
+    } else {
+      const settingsConfig = $("settings-config");
+      if (settingsConfig) settingsConfig.textContent = t("settings.loading");
+      const settingsTools = $("settings-tools");
+      if (settingsTools) replace(settingsTools, [el("p", "muted", t("settings.loading"))]);
+    }
+  }
+
+  function setLanguage(nextLang, { persist = true } = {}) {
+    state.lang = normalizeLang(nextLang);
+    if (persist) localStorage.setItem(STORAGE.lang, state.lang);
+    applyStaticI18n();
+    renderDynamicI18n();
+  }
+
   function wireEvents() {
     $("project-select").addEventListener("change", (event) => {
       selectProject(event.target.value).catch(() => {});
     });
     $("btn-refresh").addEventListener("click", () => {
       refreshProject().catch(() => {});
-      toast("Refreshed.");
+      toast(t("toast.refreshed"));
     });
     $("btn-settings").addEventListener("click", () => setTab("settings", true));
     $("empty-create-jump").addEventListener("click", () => {
@@ -1500,7 +1766,7 @@
     });
     $("btn-start").addEventListener("click", () => { startRun().catch(() => {}); });
     $("btn-stop").addEventListener("click", () => {
-      if (window.confirm(`Stop run ${state.currentRunId}?`)) stopRun().catch(() => {});
+      if (window.confirm(t("toast.confirmStop", { runId: state.currentRunId }))) stopRun().catch(() => {});
     });
     $("run-goal").addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -1523,7 +1789,7 @@
       renderAssets();
     });
     $("graph-fit").addEventListener("click", () => {
-      if (!state.graph) { ensureGraph().then(renderGraph).catch(() => {}); }
+      if (!state.graph) { ensureGraph().then((ok) => { if (ok) renderGraph(); }).catch(() => {}); }
       else renderGraph();
     });
     $("timeline-filter").addEventListener("input", (event) => {
@@ -1537,7 +1803,7 @@
     $("timeline-pause").addEventListener("click", () => {
       state.timelinePaused = !state.timelinePaused;
       const button = $("timeline-pause");
-      button.textContent = state.timelinePaused ? "Resume" : "Pause";
+      button.textContent = state.timelinePaused ? t("timeline.resume") : t("timeline.pause");
       button.setAttribute("aria-pressed", state.timelinePaused ? "true" : "false");
       $("timeline-log").classList.toggle("timeline-paused", state.timelinePaused);
       if (!state.timelinePaused) renderTimeline();
@@ -1556,8 +1822,16 @@
       state.pollMs = value;
       localStorage.setItem(STORAGE.poll, String(value));
       startPolling();
-      toast(`Refresh interval set to ${value / 1000}s.`);
+      toast(t("toast.pollUpdated", { seconds: value / 1000 }));
     });
+    const langSelect = $("language-select");
+    if (langSelect) {
+      langSelect.value = state.lang;
+      langSelect.addEventListener("change", (event) => {
+        setLanguage(event.target.value);
+        toast(t("toast.languageUpdated", { language: languageDisplayName(state.lang) }));
+      });
+    }
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) refreshProject().catch(() => {});
     });
@@ -1571,6 +1845,8 @@
   }
 
   async function init() {
+    applyStaticI18n();
+    renderDynamicI18n();
     wireTabs();
     wireEvents();
     setTab(tabFromHash() || state.tab);
@@ -1581,12 +1857,12 @@
     try {
       await loadConfig();
     } catch (error) {
-      if (error.status !== 401) toast(`Could not load config: ${error.message}`, "bad");
+      if (error.status !== 401) toast(t("toast.loadConfigFailed", { message: error.message }), "bad");
     }
     try {
       await loadProjects();
     } catch (error) {
-      if (error.status !== 401) toast(`Could not load projects: ${error.message}`, "bad");
+      if (error.status !== 401) toast(t("toast.loadProjectsFailed", { message: error.message }), "bad");
     }
     startPolling();
     window.setInterval(tickElapsed, 1000);

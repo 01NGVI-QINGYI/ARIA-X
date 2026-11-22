@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -19,6 +20,7 @@ import time
 import webbrowser
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import quote
 
 from . import __version__, TAGLINE
 from .config import AriaXConfig, BudgetConfig, EngineConfig, LLMConfig, SafetyConfig, ScopeConfig
@@ -688,6 +690,92 @@ def _dir_report_mtime(directory: Path) -> float:
     return max(mtimes) if mtimes else 0.0
 
 
+def _read_runs_readonly(
+    db_path: Path,
+    *,
+    project_id: str | None = None,
+    run_id: str | None = None,
+    limit: int = 100,
+) -> list[tuple[str, str, str]]:
+    """Query existing runs strictly read-only without ever initializing or mutating SQLite."""
+    try:
+        if not db_path.is_file() or db_path.stat().st_size == 0:
+            return []
+        uri = f"file:{quote(str(db_path.resolve()), safe='/')}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, timeout=2.0)
+    except (OSError, sqlite3.Error):
+        return []
+    try:
+        conn.execute("PRAGMA query_only = ON")
+        if run_id is not None:
+            cur = conn.execute(
+                "SELECT id, project_id, started_at FROM runs WHERE id = ? ORDER BY started_at DESC LIMIT ?",
+                (run_id, limit),
+            )
+        elif project_id is not None:
+            cur = conn.execute(
+                "SELECT id, project_id, started_at FROM runs WHERE project_id = ? ORDER BY started_at DESC LIMIT ?",
+                (project_id, limit),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT id, project_id, started_at FROM runs ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            )
+        return [(str(r[0]), str(r[1]), str(r[2] or "")) for r in cur.fetchall()]
+    except sqlite3.Error:
+        return []
+    finally:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+
+def _scan_report_dirs(runs_dir: Path) -> list[Path]:
+    """Return depth-1 and depth-2 directories under *runs_dir* that contain a report."""
+    found: list[Path] = []
+    if not runs_dir.is_dir():
+        return found
+    try:
+        children = list(runs_dir.iterdir())
+    except OSError:
+        return found
+    for child in children:
+        if not child.is_dir() or not _within_runs_root(child, runs_dir):
+            continue
+        if (child / "report.html").is_file() or (child / "report.md").is_file():
+            found.append(child)
+        try:
+            grandchildren = list(child.iterdir())
+        except OSError:
+            continue
+        for grand in grandchildren:
+            if not grand.is_dir() or not _within_runs_root(grand, runs_dir):
+                continue
+            if (grand / "report.html").is_file() or (grand / "report.md").is_file():
+                found.append(grand)
+    return found
+
+
+def _read_report_metadata(directory: Path) -> tuple[str, str]:
+    """Read ``(project_id, run_id)`` from ``findings.json`` if present and valid."""
+    findings_path = directory / "findings.json"
+    if not findings_path.is_file():
+        return "", ""
+    try:
+        payload = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "", ""
+    if not isinstance(payload, dict):
+        return "", ""
+    proj = payload.get("project")
+    meta = payload.get("meta")
+    proj_id = str(proj.get("id") or "") if isinstance(proj, dict) else ""
+    run_id = str(meta.get("run_id") or "") if isinstance(meta, dict) else ""
+    return proj_id, run_id
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     config = load_config(args)
     runs_dir = Path(config.runs_dir)
@@ -695,17 +783,13 @@ def cmd_report(args: argparse.Namespace) -> int:
         print("[aria-x] no report found", file=sys.stderr)
         return 2
 
-    store: Store | None = None
-    if config.db_path.is_file():
-        try:
-            store = open_store(config)
-        except Exception:
-            store = None
-
+    db_path = Path(config.db_path)
     candidates: list[Path] = []
     seen: set[str] = set()
 
     def add_candidate(path: Path) -> None:
+        if not _within_runs_root(path, runs_dir):
+            return
         try:
             key = str(path.resolve())
         except OSError:
@@ -714,64 +798,75 @@ def cmd_report(args: argparse.Namespace) -> int:
             seen.add(key)
             candidates.append(path)
 
-    try:
-        if args.run_id:
-            add_candidate(runs_dir / args.run_id)
-            if store is not None:
-                try:
-                    run = store.get_run(args.run_id)
-                except Exception:
-                    run = None
-                if run is not None:
-                    add_candidate(runs_dir / run.project_id / args.run_id)
-                    add_candidate(runs_dir / f"{run.project_id}-{args.run_id}")
-            for child in sorted(runs_dir.iterdir(), reverse=True):
-                if child.is_dir() and args.run_id in child.name:
-                    add_candidate(child)
-        elif args.project_id:
-            if store is not None:
-                try:
-                    for run in store.list_runs(args.project_id, limit=100):
-                        add_candidate(runs_dir / run.id)
-                        add_candidate(runs_dir / args.project_id / run.id)
-                except Exception:
-                    pass
-            fs_dirs: list[Path] = []
-            proj_dir = runs_dir / args.project_id
-            if proj_dir.is_dir():
-                fs_dirs.append(proj_dir)
-                for child in proj_dir.iterdir():
-                    if child.is_dir():
-                        fs_dirs.append(child)
-            for child in runs_dir.glob(f"{args.project_id}*"):
-                if child.is_dir():
-                    fs_dirs.append(child)
-            fs_dirs.sort(key=lambda d: (_dir_report_mtime(d), d.name), reverse=True)
-            for d in fs_dirs:
-                add_candidate(d)
+    report_dirs = _scan_report_dirs(runs_dir)
+
+    if args.run_id:
+        run_id = str(args.run_id)
+        db_runs = _read_runs_readonly(db_path, run_id=run_id)
+        db_project_ids = {pid for _, pid, _ in db_runs if pid}
+        if args.project_id:
+            if db_runs and args.project_id not in db_project_ids:
+                db_runs = []
+            for rid, pid, _ in db_runs:
+                if pid == args.project_id:
+                    add_candidate(runs_dir / rid)
+                    add_candidate(runs_dir / pid / rid)
         else:
-            if store is not None:
-                try:
-                    for run in store.list_runs(limit=100):
-                        add_candidate(runs_dir / run.id)
-                        add_candidate(runs_dir / run.project_id / run.id)
-                except Exception:
-                    pass
-            fs_dirs = []
-            for child in runs_dir.iterdir():
-                if not child.is_dir():
+            for rid, pid, _ in db_runs:
+                add_candidate(runs_dir / rid)
+                if pid:
+                    add_candidate(runs_dir / pid / rid)
+            add_candidate(runs_dir / run_id)
+
+        fs_matches: list[Path] = []
+        for directory in report_dirs:
+            meta_pid, meta_rid = _read_report_metadata(directory)
+            if directory.name != run_id and meta_rid != run_id:
+                continue
+            if args.project_id:
+                provable = (
+                    args.project_id in db_project_ids
+                    or (directory.parent.parent == runs_dir and directory.parent.name == args.project_id)
+                    or meta_pid == args.project_id
+                )
+                if not provable:
                     continue
-                if (child / "report.html").is_file() or (child / "report.md").is_file():
-                    fs_dirs.append(child)
-                for grand in child.iterdir():
-                    if grand.is_dir() and ((grand / "report.html").is_file() or (grand / "report.md").is_file()):
-                        fs_dirs.append(grand)
-            fs_dirs.sort(key=lambda d: (_dir_report_mtime(d), d.name), reverse=True)
-            for d in fs_dirs:
-                add_candidate(d)
-    finally:
-        if store is not None:
-            store.close()
+            fs_matches.append(directory)
+        fs_matches.sort(key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
+        for directory in fs_matches:
+            add_candidate(directory)
+
+    elif args.project_id:
+        project_id = str(args.project_id)
+        db_runs = _read_runs_readonly(db_path, project_id=project_id)
+        db_run_ids = [rid for rid, _, _ in db_runs]
+        for rid in db_run_ids:
+            add_candidate(runs_dir / rid)
+            add_candidate(runs_dir / project_id / rid)
+            for directory in report_dirs:
+                if directory.name == rid:
+                    add_candidate(directory)
+
+        fs_matches = []
+        for directory in report_dirs:
+            meta_pid, _ = _read_report_metadata(directory)
+            is_exact_proj_dir = directory.parent == runs_dir and directory.name == project_id
+            is_under_proj_dir = directory.parent.parent == runs_dir and directory.parent.name == project_id
+            if is_exact_proj_dir or is_under_proj_dir or meta_pid == project_id:
+                fs_matches.append(directory)
+        fs_matches.sort(key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
+        for directory in fs_matches:
+            add_candidate(directory)
+
+    else:
+        db_runs = _read_runs_readonly(db_path)
+        for rid, pid, _ in db_runs:
+            add_candidate(runs_dir / rid)
+            if pid:
+                add_candidate(runs_dir / pid / rid)
+        fs_dirs = sorted(report_dirs, key=lambda d: (_dir_report_mtime(d), str(d)), reverse=True)
+        for directory in fs_dirs:
+            add_candidate(directory)
 
     for candidate in candidates:
         target = _pick_report_in_dir(candidate, runs_dir)

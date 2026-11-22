@@ -105,8 +105,8 @@ ARIA-X combines context-aware agent reasoning with explicit state, execution pol
 - **Offline End-to-End Verification**: `./aria-x demo` requires no API key and no internet access. It launches a local teaching target on an ephemeral `127.0.0.1` port and runs the full `Planner → Worker → Finding → Report` loop deterministically.
 - **Python Standard Library Only**: Runs on CPython 3.11+ with zero third-party runtime dependencies (`pip install` is completely optional).
 - **Multi-Provider LLM Routing**: Supports OpenAI-compatible APIs (DeepSeek, vLLM, Ollama, OpenRouter), Anthropic, and deterministic `mock` and `scenario` test providers.
-- **Enforced Target Scope**: Network tools call `Scope.require_url/require_host` before sending a single packet. Supports exact hosts, wildcard domains, CIDRs, `host:port`, URL prefixes, `deny` rules, and per-host rate limits. HTTP redirects are re-authorized hop by hop; unresolved hostnames fail closed.
-- **Isolated Terminal Backends**: Supports `local`, `docker`, and `mock` sandboxes; the Docker backend defaults to `--network none`.
+- **Enforced Target Scope**: Network tools call `Scope.require_url/require_host` before sending a single packet. Supports exact hosts, wildcard domains, CIDRs, `host:port`, URL prefixes, `deny` rules, and per-host rate limits. HTTP redirects are re-authorized hop by hop; unresolved hostnames fail closed when `safety.allow_public_targets = false`.
+- **Isolated Terminal Backends**: Supports `local`, `docker`, and `mock` sandboxes; the example config and `aria-x init` template set `sandbox.network = "none"` (while the in-code `SandboxConfig` default is `"bridge"`).
 - **Configurable Approval Gate**: With `safety.approval = "ask"`, `high` and `critical` tools record an approval request and block for human confirmation; `deny` rejects them outright; `auto` executes them within Scope and command-policy boundaries.
 - **Evidence-Backed Reports**: Each run writes `report.md`, `report.html`, and `findings.json` under `runs/<run_id>/`, backed by SQLite state, a JSONL event stream, and an audit table.
 - **Zero-CDN Local Web Console**: Built-in SPA served on `127.0.0.1:8787` by default, streaming live updates over Server-Sent Events (SSE) with optional Bearer token authentication.
@@ -222,11 +222,15 @@ export ARIA_X_API_KEY="your-api-key"
 Inspect persisted results after completion:
 
 ```bash
-./aria-x projects                   # list projects
-./aria-x graph                      # inspect the blackboard summary of the latest project
-./aria-x report                     # print the latest report path (--open to view)
-./aria-x export -o out.json         # export full project graph and evidence as JSON
+./aria-x projects                               # list projects
+./aria-x graph                                  # inspect the blackboard summary of the latest project
+./aria-x report                                 # print the latest report path (--open to view)
+./aria-x report <run_id>                        # look up a report by exact run ID
+./aria-x report --project-id <project_id>       # look up the latest report for a project ID
+./aria-x export -o out.json                     # export full project graph and evidence as JSON
 ```
+
+> `aria-x report` queries SQLite strictly read-only (never initializing empty DB files) and validates directory/metadata attribution; see [CHANGELOG.md](CHANGELOG.md) for legacy archive layout compatibility.
 
 ### 4. Launch the Local Web Console
 
@@ -249,7 +253,7 @@ Binds to `http://127.0.0.1:8787` by default, providing interactive views for pro
 | `aria-x serve` | Start the local web console (`127.0.0.1:8787` by default) |
 | `aria-x doctor [--llm]` | Verify Python, config, directories, tools, engine, server, sandbox, and LLM connectivity |
 | `aria-x tools [--json]` | List all 27 built-in tools with their risk levels and Scope requirements |
-| `aria-x projects / graph / report / export` | Inspect persisted projects, graph summaries, reports, or full JSON exports |
+| `aria-x projects / graph / report / export` | Inspect persisted projects, graph summaries, reports (`report <run_id>`, `report --project-id <project_id>`; see [CHANGELOG.md](CHANGELOG.md) for legacy archive compatibility), or full JSON exports |
 
 - **Global flags**: `-c/--config <path>` (before or after the subcommand), `--version`.
 - **Exit codes**: `0` success, `1` incomplete run, `2` configuration/argument error, `130` interrupted.
@@ -295,7 +299,7 @@ max_total_intents = 40
 [sandbox]
 backend = "local"              # local | docker | mock
 image = "python:3.12-slim"
-network = "none"               # container network disabled by default
+network = "none"               # disabled in example & init templates (SandboxConfig code default is "bridge")
 timeout = 120
 
 [safety]
@@ -362,12 +366,12 @@ ARIA-X integrates target scoping, risk-based approvals, and execution auditing i
 
 ### 1. Built-In Execution Controls
 - **Mandatory Authorization Gate**: Both `scope.authorized = true` and a non-empty `scope.targets` list are required before a run can be created; omitting either raises `ConfigError`.
-- **Target-Level Scope Enforcement**: Supports exact hosts, wildcard domains, CIDRs, `host:port`, and URL prefixes. `deny` rules take precedence over `allow`; HTTP redirects are re-verified hop by hop; unresolved hostnames are rejected by default.
+- **Target-Level Scope Enforcement**: Supports exact hosts, wildcard domains, CIDRs, `host:port`, and URL prefixes. `deny` rules take precedence over `allow`; HTTP redirects are re-verified hop by hop; unresolved hostnames fail closed when `safety.allow_public_targets = false`.
 - **High-Risk Tool Approval Gate**: Supports `auto` (executes within Scope, path jail, and command policy), `ask` (creates an approval record and blocks for human confirmation up to 300 s), and `deny` (refuses immediately and logs an audit entry).
 
 ### 2. Current Design Scope
 - **Model reasoning backed by evidence**: LLMs guide exploration, while inspectable tool outputs and recorded evidence support findings. Researchers should verify complex conclusions.
-- **Layered execution controls**: `CommandPolicy` applies heuristic command filtering. For process isolation, use the Docker backend (`--network none` by default); command filtering alone is not an OS-level sandbox.
+- **Layered execution controls**: `CommandPolicy` applies heuristic command filtering. For process isolation, use the Docker backend (example config and `aria-x init` template set `network = "none"`; the in-code `SandboxConfig` default is `"bridge"`); command filtering alone is not an OS-level sandbox.
 - **Focused on local research**: SQLite WAL persistence supports local experiments and small-team workflows. Distributed scheduling is outside the v0.2.0 feature set.
 - **Purpose-built orchestration**: The built-in toolkit focuses on scoped validation, state management, and reporting rather than bundling exploit payloads or third-party scanners.
 - **Clear development roadmap**: Dedicated prompt-injection classification and crash-resume of in-progress engagements are not implemented in v0.2.0; see [Roadmap](docs/ROADMAP.md).
@@ -413,7 +417,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
   aria-x:0.2.0
 ```
 
-The container image packages only ARIA-X's Python standard-library core without third-party scanners. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for details.
+The container image packages only ARIA-X's Python standard-library core without third-party scanners. Deploying with `docker/docker-compose.yml` requires an explicit non-empty `ARIA_X_AUTH_TOKEN` (Compose fails fast if unset or empty). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for details.
 
 ### Verification & Self-Check Scripts
 

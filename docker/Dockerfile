@@ -4,11 +4,11 @@
 # works from a fully offline Docker build context (given a local base image).
 #
 # Build from the repository root:
-#   docker build -f docker/Dockerfile -t aria-x:0.1.1 .
+#   docker build -f docker/Dockerfile -t aria-x:0.2.0 .
 # Run (loopback-published, token-protected):
 #   docker run --rm -p 127.0.0.1:8787:8787 \
 #     -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
-#     -v "$PWD/data:/app/data" aria-x:0.1.1
+#     -v "$PWD/data:/app/data" aria-x:0.2.0
 #
 # The container cannot reach host files except the mounted data volume. Target
 # traffic still needs network access; see docker/kali-sandbox.md before enabling
@@ -19,7 +19,7 @@ FROM python:3.12-slim
 LABEL org.opencontainers.image.title="ARIA-X" \
       org.opencontainers.image.description="Autonomous Reasoning & Investigation Agent, eXtended — authorized security research" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
-      org.opencontainers.image.source="https://example.invalid/aria-x"
+      org.opencontainers.image.source="https://github.com/01NGVI-QINGYI/ARIA-X"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -189,6 +189,7 @@ class SessionCleanupTests(EngineTestBase):
             self.skipTest("PTY sessions require a POSIX platform")
 
         config = self.make_config(bootstrap=False)
+        config.sandbox.backend = "local"
         engagement, store, events = self.make_engagement(config)
         project = engagement.create_project("Session cleanup", "Open a shell and finish")
         opened: list[str] = []

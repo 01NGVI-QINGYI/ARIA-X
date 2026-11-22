@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -812,6 +813,25 @@ def _read_report_metadata(directory: Path) -> tuple[str, str]:
     return proj_id, run_id
 
 
+_ARCHIVE_STAMP_RE = re.compile(
+    r"^(?P<prefix>.+)-(?P<stamp>"
+    r"(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])"
+    r"(?:[T_-]?(?:[01]\d|2[0-3])[-_]?[0-5]\d[-_]?[0-5]\dZ?)?"
+    r"|"
+    r"(?:19|20)\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])"
+    r"(?:[T_-](?:[01]\d|2[0-3])[-_]?[0-5]\d[-_]?[0-5]\dZ?)?"
+    r")$"
+)
+
+
+def _split_timestamped_archive(name: str) -> tuple[str, str] | None:
+    """Split an explicit ``<project_id>-<timestamp>`` archive directory name."""
+    match = _ARCHIVE_STAMP_RE.match(name)
+    if match is None:
+        return None
+    return match.group("prefix"), match.group("stamp")
+
+
 def _inspect_report_dir(directory: Path, runs_dir: Path, db: _ReadOnlyRunDB) -> _ReportArchive | None:
     """Parse and validate a report archive's attribution independently of query mode."""
     meta_pid, meta_rid = _read_report_metadata(directory)
@@ -836,6 +856,9 @@ def _inspect_report_dir(directory: Path, runs_dir: Path, db: _ReadOnlyRunDB) -> 
         elif meta_rid and name.endswith(f"-{meta_rid}") and len(name) > len(meta_rid) + 1:
             dir_pid = name[:-(len(meta_rid) + 1)]
             dir_rid = meta_rid
+        elif (stamped := _split_timestamped_archive(name)) is not None and not db.lookup_run(stamped[1]):
+            dir_pid = stamped[0]
+            dir_rid = ""
         elif meta_pid and name.startswith(f"{meta_pid}-") and len(name) > len(meta_pid) + 1:
             dir_pid = meta_pid
             dir_rid = name[len(meta_pid) + 1:]

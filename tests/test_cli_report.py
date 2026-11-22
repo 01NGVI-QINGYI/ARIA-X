@@ -469,6 +469,211 @@ class CliReportResolutionTests(unittest.TestCase):
                 self.assertEqual(rc, 0, hit)
                 self.assertEqual(Path(buf.getvalue().strip()).resolve(), valid_rep.resolve())
 
+    def test_timestamped_archive_compatibility_and_conflict_rejection(self) -> None:
+        # 1. Valid timestamped archive: runs/p_archive-20250102T010203/ with findings.json
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+
+            arch_dir = runs_dir / "p_archive-20250102T010203"
+            arch_dir.mkdir()
+            arch_rep = arch_dir / "report.html"
+            arch_rep.write_text("<html>timestamped archive</html>", encoding="utf-8")
+            (arch_dir / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_archive"}, "meta": {"run_id": "run_legacy"}}),
+                encoding="utf-8",
+            )
+
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(
+                json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                encoding="utf-8",
+            )
+            db_path = data_dir / "aria-x.db"
+
+            for mode in ("no_db", "zero_bytes", "zero_tables", "matching_db"):
+                if mode == "no_db":
+                    db_path.unlink(missing_ok=True)
+                elif mode == "zero_bytes":
+                    db_path.write_bytes(b"")
+                elif mode == "zero_tables":
+                    db_path.unlink(missing_ok=True)
+                    c = sqlite3.connect(db_path)
+                    c.close()
+                else:
+                    db_path.unlink(missing_ok=True)
+                    store = Store(str(db_path))
+                    try:
+                        store.create_project(Project(id="p_archive", name="Archive", goal="g"))
+                        store.create_run(Run(
+                            id="run_legacy",
+                            project_id="p_archive",
+                            status="completed",
+                            started_at="2025-01-02T01:02:03Z",
+                        ))
+                    finally:
+                        store.close()
+
+                size_before = db_path.stat().st_size if db_path.exists() else None
+                for hit in (
+                    {"project_id": None, "run_id": None},
+                    {"project_id": "p_archive", "run_id": None},
+                    {"project_id": None, "run_id": "run_legacy"},
+                    {"project_id": "p_archive", "run_id": "run_legacy"},
+                ):
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
+                    self.assertEqual(rc, 0, (mode, hit))
+                    self.assertEqual(Path(buf.getvalue().strip()).resolve(), arch_rep.resolve())
+
+                for miss in (
+                    {"project_id": "p_arch", "run_id": None},
+                    {"project_id": "p_other", "run_id": None},
+                    {"project_id": None, "run_id": "run_leg"},
+                    {"project_id": None, "run_id": "20250102T010203"},
+                    {"project_id": "p_other", "run_id": "run_legacy"},
+                ):
+                    rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **miss))
+                    self.assertEqual(rc, 2, (mode, miss))
+
+                if mode in ("zero_bytes", "zero_tables"):
+                    self.assertEqual(db_path.stat().st_size, size_before)
+                    check_conn = sqlite3.connect(db_path)
+                    try:
+                        self.assertEqual(
+                            check_conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall(),
+                            [],
+                        )
+                    finally:
+                        check_conn.close()
+
+        # 2. Hyphenated project_id with YYYYMMDD-HHMMSS stamp
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+            h_dir = runs_dir / "proj-alpha-20250102-010203"
+            h_dir.mkdir()
+            h_rep = h_dir / "report.html"
+            h_rep.write_text("<html>hyphenated stamp</html>", encoding="utf-8")
+            (h_dir / "findings.json").write_text(
+                json.dumps({"project": {"id": "proj-alpha"}, "meta": {"run_id": "run_h1"}}),
+                encoding="utf-8",
+            )
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(
+                json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                encoding="utf-8",
+            )
+            for hit in (
+                {"project_id": None, "run_id": None},
+                {"project_id": "proj-alpha", "run_id": None},
+            ):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **hit))
+                self.assertEqual(rc, 0, hit)
+                self.assertEqual(Path(buf.getvalue().strip()).resolve(), h_rep.resolve())
+            rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, project_id="proj", run_id=None))
+            self.assertEqual(rc, 2)
+
+        # 3. Non-timestamp suffix must NOT trigger prefix fallback
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_dir = base / "data"
+            runs_dir = base / "runs"
+            data_dir.mkdir()
+            runs_dir.mkdir()
+            bad_suffix = runs_dir / "p_archive-run_other"
+            bad_suffix.mkdir()
+            (bad_suffix / "report.html").write_text("<html>non-stamp</html>", encoding="utf-8")
+            (bad_suffix / "findings.json").write_text(
+                json.dumps({"project": {"id": "p_archive"}, "meta": {"run_id": "run_legacy"}}),
+                encoding="utf-8",
+            )
+            cfg_path = base / "aria-x.json"
+            cfg_path.write_text(
+                json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                encoding="utf-8",
+            )
+            for query in (
+                {"project_id": None, "run_id": None},
+                {"project_id": "p_archive", "run_id": None},
+                {"project_id": None, "run_id": "run_legacy"},
+            ):
+                rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **query))
+                self.assertEqual(rc, 2, query)
+
+        # 4. Conflict scenarios on timestamped archives must all be rejected
+        conflict_cases = ("dir_vs_meta", "db_vs_dir_and_meta", "db_vs_dir_meta_run_only", "db_literal_stamp")
+        for case in conflict_cases:
+            with tempfile.TemporaryDirectory() as tmp:
+                base = Path(tmp)
+                data_dir = base / "data"
+                runs_dir = base / "runs"
+                data_dir.mkdir()
+                runs_dir.mkdir()
+                cfg_path = base / "aria-x.json"
+                cfg_path.write_text(
+                    json.dumps({"data_dir": str(data_dir), "runs_dir": str(runs_dir)}),
+                    encoding="utf-8",
+                )
+                db_path = data_dir / "aria-x.db"
+
+                if case == "dir_vs_meta":
+                    d = runs_dir / "p_other-20250102T010203"
+                    d.mkdir()
+                    (d / "report.html").write_text("<html>conflict</html>", encoding="utf-8")
+                    (d / "findings.json").write_text(
+                        json.dumps({"project": {"id": "p_archive"}, "meta": {"run_id": "run_legacy"}}),
+                        encoding="utf-8",
+                    )
+                else:
+                    d = runs_dir / "p_archive-20250102T010203"
+                    d.mkdir()
+                    (d / "report.html").write_text("<html>conflict</html>", encoding="utf-8")
+                    if case == "db_vs_dir_and_meta":
+                        (d / "findings.json").write_text(
+                            json.dumps({"project": {"id": "p_archive"}, "meta": {"run_id": "run_legacy"}}),
+                            encoding="utf-8",
+                        )
+                    elif case == "db_vs_dir_meta_run_only":
+                        (d / "findings.json").write_text(
+                            json.dumps({"meta": {"run_id": "run_legacy"}}),
+                            encoding="utf-8",
+                        )
+
+                    store = Store(str(db_path))
+                    try:
+                        store.create_project(Project(id="p_archive", name="Archive", goal="g"))
+                        store.create_project(Project(id="p_other", name="Other", goal="g"))
+                        rid = "20250102T010203" if case == "db_literal_stamp" else "run_legacy"
+                        store.create_run(Run(
+                            id=rid,
+                            project_id="p_other",
+                            status="completed",
+                            started_at="2025-01-02T01:02:03Z",
+                        ))
+                    finally:
+                        store.close()
+
+                for query in (
+                    {"project_id": None, "run_id": None},
+                    {"project_id": "p_archive", "run_id": None},
+                    {"project_id": "p_other", "run_id": None},
+                    {"project_id": None, "run_id": "run_legacy"},
+                    {"project_id": "p_archive", "run_id": "run_legacy"},
+                    {"project_id": "p_other", "run_id": "run_legacy"},
+                ):
+                    rc = cmd_report(argparse.Namespace(config=str(cfg_path), open=False, **query))
+                    self.assertEqual(rc, 2, (case, query))
+
     def test_web_load_report_binds_preview_and_download_to_same_run(self) -> None:
         node = shutil.which("node") or "/opt/homebrew/bin/node"
         if not Path(node).exists():

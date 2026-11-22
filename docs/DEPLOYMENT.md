@@ -215,7 +215,7 @@ export ARIA_X_UID="$(id -u)" ARIA_X_GID="$(id -g)"   # match the mounted data di
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-`docker/docker-compose.yml` 还提供一个 `sandbox` profile 的 Kali 容器作为参考；它默认不启动，
+`docker/docker-compose.yml` 强制要求显式设置 `ARIA_X_AUTH_TOKEN`（未设置或为空时 `docker compose` 会直接报错退出，不再使用固定默认口令）。它还提供一个 `sandbox` profile 的 Kali 容器作为参考；它默认不启动，
 也不与 ARIA-X 容器共享网络。
 
 ### 6.3 在容器里跑 ARIA-X + Docker 沙箱

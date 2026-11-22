@@ -291,7 +291,10 @@ class Api:
     def scope_summary(self) -> dict[str, Any]:
         try:  # pragma: no cover - scope layer is small but optional for tests
             from ..tools.scope import Scope
-            return Scope(self.config.scope).summary()
+            return Scope(
+                self.config.scope,
+                allow_public_targets=bool(self.config.safety.allow_public_targets),
+            ).summary()
         except Exception:
             cfg = self.config.scope
             return {

@@ -36,6 +36,7 @@ from typing import Any
 
 from ..util import new_id, now_iso, redact, truncate
 from .base import ToolContext, ToolRegistry, ToolResult, ToolSpec
+from .sandbox import _base_env
 from .terminal import audit, clamp_int, emit, record_trace, resolve_in_workdir
 
 try:  # POSIX only; the project targets macOS and Linux.
@@ -66,6 +67,7 @@ class Session:
     fd: int
     backend: str
     container: str = ""
+    docker_binary: str = "docker"
     created_at: str = field(default_factory=now_iso)
     last_used: float = field(default_factory=time.monotonic)
     buffer: bytearray = field(default_factory=bytearray)
@@ -155,21 +157,41 @@ class SessionManager:
 
     def open(self, ctx: ToolContext, command: str, *, name: str = "",
              cwd: str | None = None) -> Session:
+        backend = str(getattr(ctx.sandbox, "backend", "local") or "local").lower()
+        if backend == "mock":
+            raise RuntimeError("interactive PTY sessions are not available on the mock sandbox backend")
+
+        base_workdir = Path(ctx.workdir).resolve()
+        effective_cwd = base_workdir
+        if cwd:
+            candidate_cwd = Path(cwd)
+            resolved_cwd = (candidate_cwd if candidate_cwd.is_absolute()
+                            else base_workdir / candidate_cwd).resolve()
+            try:
+                resolved_cwd.relative_to(base_workdir)
+            except ValueError:
+                raise RuntimeError("session cwd escapes the engagement workdir") from None
+            if not resolved_cwd.is_dir():
+                raise RuntimeError("session cwd is not a directory")
+            effective_cwd = resolved_cwd
+
         with self._lock:
             self.sweep()
             if len(self._sessions) >= self.max_sessions:
                 raise RuntimeError(
                     f"session limit reached ({self.max_sessions}); close one with session_close")
 
-        backend = getattr(ctx.sandbox, "backend", "local")
         container = ""
+        docker_binary = "docker"
         if backend == "docker":
             container = "aria-x-sess-" + os.urandom(4).hex()
+            docker_binary = str(getattr(ctx.config.sandbox, "docker_binary", "") or "docker")
             argv = self._docker_argv(ctx, container, command)
         else:
             argv = ["/bin/bash", "-lc", command]
 
-        env = dict(os.environ)
+        env = _base_env()
+        env.update(dict(getattr(ctx.config.sandbox, "env", None) or {}))
         env.setdefault("TERM", "xterm-256color")
         env["ARIA_X_SESSION"] = "1"
 
@@ -178,7 +200,7 @@ class SessionManager:
             try:
                 proc = subprocess.Popen(
                     argv, stdin=slave, stdout=slave, stderr=slave,
-                    cwd=str(ctx.workdir), env=env, start_new_session=True, close_fds=True,
+                    cwd=str(effective_cwd), env=env, start_new_session=True, close_fds=True,
                 )
             finally:
                 os.close(slave)
@@ -186,14 +208,14 @@ class SessionManager:
         else:  # pragma: no cover - Windows fallback: pipes, no TTY semantics
             proc = subprocess.Popen(
                 argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                cwd=str(ctx.workdir), env=env, start_new_session=True,
+                cwd=str(effective_cwd), env=env, start_new_session=True,
             )
             assert proc.stdout is not None
             fd = proc.stdout.fileno()
 
         session = Session(id=new_id("s", 10), name=name or command.split()[0][:40],
                           command=command, proc=proc, fd=fd, backend=backend,
-                          container=container)
+                          container=container, docker_binary=docker_binary)
         with self._lock:
             self._sessions[session.id] = session
         # Give the process a moment to print its banner/prompt.
@@ -264,7 +286,7 @@ class SessionManager:
             pass
         if session.container:
             try:
-                subprocess.run([getattr(session, "_docker", "docker"), "kill", session.container],
+                subprocess.run([session.docker_binary or "docker", "kill", session.container],
                                capture_output=True, timeout=10)
             except Exception:
                 pass

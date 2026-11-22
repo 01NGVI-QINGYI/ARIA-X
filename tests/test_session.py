@@ -7,10 +7,12 @@ Windows, where ARIA-X is not a supported target anyway.
 
 from __future__ import annotations
 
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from aria_x.config import AriaXConfig, ScopeConfig
 from aria_x.events import EventBus
@@ -189,6 +191,31 @@ class SessionTests(unittest.TestCase):
         self.assertIn("session_send", actions)
         traces = self.store.list_traces(self.project.id, limit=50)
         self.assertTrue(any(t.tool_name == "session_open" for t in traces))
+
+    def test_session_sanitizes_host_secret_env(self) -> None:
+        with mock.patch.dict(os.environ, {"ARIA_X_API_KEY": "sk-synthetic-secret-000", "ARIA_X_AUTH_TOKEN": "tok-synthetic"}):
+            session_id = self.open()
+            sent = self.send(session_id, 'printf "KEY=[%s] TOK=[%s]\\n" "${ARIA_X_API_KEY:-}" "${ARIA_X_AUTH_TOKEN:-}"')
+            self.assertTrue(sent.ok, sent.error)
+            self.assertIn("KEY=[] TOK=[]", sent.data["output"])
+
+    def test_mock_backend_refuses_session_without_spawning(self) -> None:
+        from aria_x.config import SandboxConfig
+        self.ctx.sandbox = build_sandbox(SandboxConfig(backend="mock"), self.work)
+        with mock.patch("aria_x.tools.session.subprocess.Popen") as popen_mock:
+            result = self.registry.execute("session_open", {"command": "bash --norc"}, self.ctx)
+        self.assertFalse(result.ok)
+        self.assertIn("mock", result.error.lower())
+        popen_mock.assert_not_called()
+
+    def test_session_cwd_honors_subdirectory(self) -> None:
+        sub = self.work / "subdir"
+        sub.mkdir()
+        result = self.registry.execute("session_open", {"command": "bash --norc", "cwd": "subdir"}, self.ctx)
+        self.assertTrue(result.ok, result.error)
+        sent = self.send(result.data["session_id"], "pwd")
+        self.assertTrue(sent.ok)
+        self.assertIn("subdir", sent.data["output"])
 
 
 if __name__ == "__main__":

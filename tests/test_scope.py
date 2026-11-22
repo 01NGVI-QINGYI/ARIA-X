@@ -33,8 +33,28 @@ class ScopeAuthorizationTests(unittest.TestCase):
     def test_url_target_with_path_prefix_and_port(self):
         scope = make_scope(["http://127.0.0.1:8080/app"])
         self.assertTrue(scope.authorize_url("http://127.0.0.1:8080/app/index").allowed)
+        self.assertFalse(scope.authorize_url("http://127.0.0.1:8080/admin").allowed)
+        self.assertFalse(scope.authorize_url("http://127.0.0.1:8080/app/../admin").allowed)
+        self.assertFalse(scope.authorize_url("https://127.0.0.1:8080/app/index").allowed)
         self.assertFalse(scope.authorize_url("http://127.0.0.1:9090/app/index").allowed)
         self.assertFalse(scope.authorize_url("ftp://127.0.0.1:8080/app").allowed)
+
+    def test_wildcard_url_target_enforces_scheme_and_prefix(self):
+        scope = make_scope(["https://*.staging.example.test/api"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=[]):
+            self.assertTrue(scope.authorize_url("https://app.staging.example.test/api/v1").allowed)
+            self.assertFalse(scope.authorize_url("http://app.staging.example.test/api/v1").allowed)
+            self.assertFalse(scope.authorize_url("https://app.staging.example.test/admin").allowed)
+
+    def test_allow_public_targets_false_blocks_global_ips(self):
+        scope = Scope(
+            ScopeConfig(authorized=True, targets=["8.8.8.8", "127.0.0.1"], allow_loopback=True, max_rps=1000.0),
+            allow_public_targets=False,
+        )
+        self.assertTrue(scope.authorize_host("127.0.0.1").allowed)
+        decision = scope.authorize_host("8.8.8.8")
+        self.assertFalse(decision.allowed)
+        self.assertIn("public address", decision.reason)
 
     def test_wildcard_domain(self):
         scope = make_scope(["*.example.test"])

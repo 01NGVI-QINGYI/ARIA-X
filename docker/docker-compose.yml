@@ -21,7 +21,7 @@ services:
     ports:
       - "127.0.0.1:8787:8787"
     environment:
-      ARIA_X_AUTH_TOKEN: "${ARIA_X_AUTH_TOKEN:-change-me-before-use}"
+      ARIA_X_AUTH_TOKEN: "${ARIA_X_AUTH_TOKEN:?Set ARIA_X_AUTH_TOKEN in your environment or .env before starting docker compose}"
       ARIA_X_DATA_DIR: /app/data
       ARIA_X_LOG_LEVEL: "${ARIA_X_LOG_LEVEL:-INFO}"
       ARIA_X_PROVIDER: "${ARIA_X_PROVIDER:-openai}"

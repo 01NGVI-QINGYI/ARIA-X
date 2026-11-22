@@ -111,12 +111,14 @@ def _looks_aggressive(command: str) -> bool:
 class Sandbox:
     backend = "base"
 
-    def __init__(self, config: SandboxConfig, workdir: str | Path) -> None:
+    def __init__(self, config: SandboxConfig, workdir: str | Path, *,
+                 extra_blocked_patterns: Sequence[str] = ()) -> None:
         self.config = config
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
+        # block_destructive stays hard-enabled (safety.block_destructive cannot weaken it).
         self.policy = CommandPolicy(block_destructive=True,
-                                    extra_patterns=config.extra_args if False else ())
+                                    extra_patterns=extra_blocked_patterns)
 
     def ensure_ready(self) -> tuple[bool, str]:  # pragma: no cover - overridden
         return True, "ready"
@@ -174,8 +176,9 @@ class LocalSandbox(Sandbox):
 class DockerSandbox(Sandbox):
     backend = "docker"
 
-    def __init__(self, config: SandboxConfig, workdir: str | Path) -> None:
-        super().__init__(config, workdir)
+    def __init__(self, config: SandboxConfig, workdir: str | Path, *,
+                 extra_blocked_patterns: Sequence[str] = ()) -> None:
+        super().__init__(config, workdir, extra_blocked_patterns=extra_blocked_patterns)
         self.docker = config.docker_binary or "docker"
         self.image = config.image
 
@@ -236,8 +239,9 @@ class MockSandbox(Sandbox):
     backend = "mock"
 
     def __init__(self, config: SandboxConfig, workdir: str | Path,
-                 outputs: Mapping[str, SandboxResult] | None = None) -> None:
-        super().__init__(config, workdir)
+                 outputs: Mapping[str, SandboxResult] | None = None, *,
+                 extra_blocked_patterns: Sequence[str] = ()) -> None:
+        super().__init__(config, workdir, extra_blocked_patterns=extra_blocked_patterns)
         self.outputs = dict(outputs or {})
         self.calls: list[str] = []
 
@@ -250,13 +254,14 @@ class MockSandbox(Sandbox):
         return SandboxResult(exit_code=0, stdout="mock-ok", stderr="", command=command, backend="mock")
 
 
-def build_sandbox(config: SandboxConfig, workdir: str | Path) -> Sandbox:
+def build_sandbox(config: SandboxConfig, workdir: str | Path, *,
+                  extra_blocked_patterns: Sequence[str] = ()) -> Sandbox:
     backend = (config.backend or "local").lower()
     if backend == "docker":
-        return DockerSandbox(config, workdir)
+        return DockerSandbox(config, workdir, extra_blocked_patterns=extra_blocked_patterns)
     if backend == "mock":
-        return MockSandbox(config, workdir)
-    return LocalSandbox(config, workdir)
+        return MockSandbox(config, workdir, extra_blocked_patterns=extra_blocked_patterns)
+    return LocalSandbox(config, workdir, extra_blocked_patterns=extra_blocked_patterns)
 
 
 def _base_env() -> dict[str, str]:

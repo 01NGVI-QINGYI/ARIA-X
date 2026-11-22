@@ -505,13 +505,21 @@ class Api:
                              content_type=MARKDOWN_TYPE,
                              headers={"Content-Disposition": f'inline; filename="{path.name}"'})
 
-    def get_run_report(self, *, run_id: str, **_kwargs: Any) -> Response:
+    def get_run_report(self, *, run_id: str, query: Mapping[str, Sequence[str]] | None = None,
+                       **_kwargs: Any) -> Response:
         self.store.get_run(run_id)  # type: ignore[union-attr]
-        path = self._find_report(run_id=run_id, suffix=".html")
+        fmt = (_first(query or {}, "format", "html") or "html").strip().lower()
+        if fmt == "html":
+            suffix, ctype = ".html", HTML_TYPE
+        elif fmt in {"md", "markdown"}:
+            suffix, ctype = ".md", MARKDOWN_TYPE
+        else:
+            raise RequestError("format must be html or md")
+        path = self._find_report(run_id=run_id, suffix=suffix)
         if path is None:
             raise NotFound(f"no report found for run: {run_id}")
         return Response.text(path.read_text(encoding="utf-8", errors="replace"),
-                             content_type=HTML_TYPE,
+                             content_type=ctype,
                              headers={"Content-Disposition": f'inline; filename="{path.name}"'})
 
     def _runs_root(self) -> Path:

@@ -58,6 +58,8 @@ class LLMConfig:
         url = normalize_base_url(self.base_url)
         if not url and self.provider == "openai":
             url = "https://api.openai.com/v1"
+        if not url and self.provider == "anthropic":
+            url = "https://api.anthropic.com"
         if not url and self.provider == "ollama":
             url = "http://127.0.0.1:11434/v1"
         return url
@@ -223,6 +225,12 @@ class AriaXConfig:
         if self.llm.provider == "openai" and not self.llm.api_key and "localhost" not in self.llm.resolved_base_url() \
                 and "127.0.0.1" not in self.llm.resolved_base_url():
             raise ConfigError("llm.api_key is required (or set ARIA_X_API_KEY)")
+        if self.llm.provider == "anthropic":
+            resolved = self.llm.resolved_base_url().lower()
+            header_keys = {str(k).lower() for k in (self.llm.extra_headers or {})}
+            has_custom_auth = bool(header_keys & {"x-api-key", "authorization"})
+            if "api.anthropic.com" in resolved and not self.llm.api_key and not has_custom_auth:
+                raise ConfigError("llm.api_key is required for Anthropic (or set ARIA_X_API_KEY)")
         if self.sandbox.backend not in {"local", "docker", "mock"}:
             raise ConfigError(f"unsupported sandbox.backend '{self.sandbox.backend}'")
         if self.safety.approval not in {"auto", "ask", "deny"}:

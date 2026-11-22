@@ -226,5 +226,36 @@ class RoleDetectionTests(unittest.TestCase):
         self.assertEqual(provider.chat(messages).content, "generic")
 
 
+class AnthropicConfigAndTimeoutTests(unittest.TestCase):
+    def test_anthropic_default_base_url_and_custom_auth_headers(self) -> None:
+        from aria_x.config import AriaXConfig, LLMConfig
+        from aria_x.errors import ConfigError
+
+        cfg_no_key = AriaXConfig(llm=LLMConfig(provider="anthropic"))
+        self.assertEqual(cfg_no_key.llm.resolved_base_url(), "https://api.anthropic.com")
+        with self.assertRaises(ConfigError):
+            cfg_no_key.validate()
+
+        cfg_header_auth = AriaXConfig(
+            llm=LLMConfig(provider="anthropic", extra_headers={"x-api-key": "custom-tok"})
+        )
+        cfg_header_auth.validate()
+
+        cfg_custom_gateway = AriaXConfig(
+            llm=LLMConfig(provider="anthropic", base_url="http://127.0.0.1:8000")
+        )
+        cfg_custom_gateway.validate()
+
+    def test_anthropic_timeout_raises_retryable_llm_error(self) -> None:
+        from unittest import mock
+        from aria_x.llm.anthropic import AnthropicProvider
+
+        provider = AnthropicProvider(api_key="test-key", timeout=1.0)
+        with mock.patch("aria_x.llm.anthropic.urllib.request.urlopen", side_effect=TimeoutError("timed out")):
+            with self.assertRaises(LLMError) as ctx:
+                provider.chat([ChatMessage.user("hello")])
+        self.assertTrue(ctx.exception.details.get("retryable"))
+
+
 if __name__ == "__main__":
     unittest.main()

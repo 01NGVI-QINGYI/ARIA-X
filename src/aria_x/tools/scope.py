@@ -24,7 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from ..config import ScopeConfig
 from ..errors import ScopeViolation
@@ -66,22 +66,71 @@ class _HostRule:
         return True
 
 
+_ENCODED_TRAVERSAL = re.compile(r"%(?:2e|2f|5c|00)", re.I)
+_BAD_PERCENT = re.compile(r"%(?![0-9a-fA-F]{2})")
+
+
+def _has_control_chars(value: str) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
+def _validate_scoped_path(raw_path: str) -> tuple[bool, str, str]:
+    """Validate a URL path strictly without rewriting ambiguous traversal segments."""
+    path = raw_path or "/"
+    if not path.startswith("/"):
+        return False, "", "URL path must start with '/'"
+    if _has_control_chars(path):
+        return False, "", "URL path contains control characters"
+    if "\\" in path or ";" in path or "//" in path:
+        return False, "", "URL path contains ambiguous separator or parameter syntax"
+    if _BAD_PERCENT.search(path):
+        return False, "", "URL path contains malformed percent-encoding"
+    if any(seg in {".", ".."} for seg in path.split("/")):
+        return False, "", "URL path contains dot traversal segments"
+
+    cur = path
+    for _ in range(5):
+        if _ENCODED_TRAVERSAL.search(cur):
+            return False, "", "encoded path separator or dot segment not allowed"
+        nxt = unquote(cur)
+        if _has_control_chars(nxt):
+            return False, "", "decoded URL path contains control characters"
+        if "\\" in nxt or ";" in nxt or "//" in nxt:
+            return False, "", "decoded URL path contains ambiguous separator"
+        if any(seg.split(";", 1)[0] in {".", ".."} for seg in nxt.split("/")):
+            return False, "", "decoded URL path contains dot traversal segments"
+        if nxt == cur:
+            break
+        cur = nxt
+
+    normalized = path.rstrip("/") or "/"
+    return True, normalized, ""
+
+
 @dataclass(slots=True)
 class _UrlRule:
     scheme: str
     host_rule: _HostRule
     path_prefix: str = ""
 
-    def matches(self, scheme: str, host: str, port: int | None, path: str) -> bool:
+    def check(self, scheme: str, host: str, port: int | None, path: str) -> tuple[bool, str]:
         if self.scheme and self.scheme != scheme:
-            return False
+            return False, ""
         if not self.host_rule.matches(host, port):
-            return False
-        prefix = self.path_prefix
+            return False, ""
+        prefix = self.path_prefix.rstrip("/")
         if not prefix:
-            return True
-        norm_path = posixpath.normpath(path or "/")
-        return norm_path == prefix or norm_path.startswith(prefix + "/")
+            return True, ""
+        ok, cmp_path, reason = _validate_scoped_path(path or "/")
+        if not ok:
+            return False, reason
+        if cmp_path == prefix or cmp_path.startswith(prefix + "/"):
+            return True, ""
+        return False, ""
+
+    def matches(self, scheme: str, host: str, port: int | None, path: str) -> bool:
+        ok, _ = self.check(scheme, host, port, path)
+        return ok
 
 
 class Scope:
@@ -167,7 +216,12 @@ class Scope:
     # ------------------------------------------------------------------
 
     def authorize_url(self, url: str, method: str = "GET") -> Decision:
-        parts = urlsplit(url)
+        raw_url = str(url or "")
+        if raw_url != raw_url.strip() or _has_control_chars(raw_url):
+            return Decision(False, "URL contains leading/trailing whitespace or control characters", url)
+        parts = urlsplit(raw_url)
+        if "\\" in (parts.netloc or ""):
+            return Decision(False, "URL authority contains invalid backslash", url)
         scheme = parts.scheme.lower()
         if scheme not in {"http", "https"}:
             return Decision(False, f"unsupported scheme '{parts.scheme}'", url)
@@ -177,12 +231,19 @@ class Scope:
         decision = self._check_common(host, port, target=url)
         if not decision.allowed:
             return decision
-        if self._matches_host_or_net(decision.host, port, decision.ips) or any(
-            rule.matches(scheme, decision.host, port, path) for rule in self.url_rules
-        ):
+        if self._matches_host_or_net(decision.host, port, decision.ips):
             return Decision(True, "in scope", url, decision.host, port, decision.ips)
-        reason = ("URL is not covered by any scope URL prefix"
-                  if self.url_rules else "target is not in scope")
+        path_reason = ""
+        for rule in self.url_rules:
+            matched, rule_reason = rule.check(scheme, decision.host, port, path)
+            if matched:
+                return Decision(True, "in scope", url, decision.host, port, decision.ips)
+            if rule_reason and not path_reason:
+                path_reason = rule_reason
+        reason = path_reason or (
+            "URL is not covered by any scope URL prefix"
+            if self.url_rules else "target is not in scope"
+        )
         return Decision(False, reason, url, decision.host, port, decision.ips)
 
     def authorize_host(self, host: str, port: int | None = None, *, target: str = "") -> Decision:
@@ -228,6 +289,13 @@ class Scope:
             ips = [host]
         except ValueError:
             ips = _resolve(host)
+
+        if not self.allow_public_targets and not ips:
+            return Decision(
+                False,
+                f"cannot verify non-public address for unresolved host '{host}'",
+                target, host, port, ips,
+            )
 
         for ip_text in ips:
             try:

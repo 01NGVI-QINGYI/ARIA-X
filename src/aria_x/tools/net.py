@@ -30,6 +30,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from ..errors import ScopeViolation
 from ..util import json_dumps, now_iso, redact, truncate
 from .base import ToolContext, ToolRegistry, ToolResult, ToolSpec
 from .terminal import audit, clamp_float, clamp_int
@@ -147,7 +148,10 @@ class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
         self.log = log
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        absolute = urllib.parse.urljoin(req.full_url, newurl)
+        raw_new = str(newurl or "")
+        if "\\" in raw_new or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw_new):
+            raise ScopeViolation("redirect target contains invalid characters", target=raw_new)
+        absolute = urllib.parse.urljoin(req.full_url, raw_new)
         decision = self.ctx.scope.require_url(absolute, "GET")
         self.ctx.scope.acquire_slot(decision.host or "")
         # Never forward credentials to a different origin (urllib would).
@@ -192,7 +196,7 @@ def _http_request(ctx: ToolContext, *, method: str, url: str, headers: dict[str,
     final_url = url
     redirects: list[dict[str, Any]] = []
     try:
-        request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
+        request = urllib.request.Request(decision.target or url, data=data, headers=request_headers, method=method)
         # No environment proxies, and redirects are scope-checked hop by hop.
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                              _ScopedRedirectHandler(ctx, redirects))

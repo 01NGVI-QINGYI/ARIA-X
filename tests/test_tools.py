@@ -191,6 +191,41 @@ class ToolTestCase(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("method", result.error)
 
+    def test_http_encoded_traversal_and_unresolved_public_denied_before_transport(self):
+        from unittest import mock
+        import urllib.request
+        from aria_x.errors import ScopeViolation
+        from aria_x.tools.net import _ScopedRedirectHandler
+
+        # 1. Encoded traversal on path-scoped target must fail BEFORE build_opener
+        ctx_prefix = self.ctx.child(scope=Scope(ScopeConfig(
+            authorized=True, targets=[f"{self.base}/api"], allow_loopback=True, max_rps=1000.0,
+        )))
+        with mock.patch("aria_x.tools.net.urllib.request.build_opener") as opener_mock:
+            res = self.registry.execute("http_request", {"url": f"{self.base}/api/%2e%2e/admin"}, ctx_prefix)
+            self.assertFalse(res.ok)
+            self.assertIn("scope", res.error)
+            opener_mock.assert_not_called()
+
+        # 2. Unresolved host with allow_public_targets=False must fail BEFORE build_opener
+        ctx_nopub = self.ctx.child(scope=Scope(
+            ScopeConfig(authorized=True, targets=["*.example.test"], allow_loopback=True, max_rps=1000.0),
+            allow_public_targets=False,
+        ))
+        with mock.patch("aria_x.tools.scope._resolve", return_value=[]), \
+                mock.patch("aria_x.tools.net.urllib.request.build_opener") as opener_mock:
+            res = self.registry.execute("http_request", {"url": "https://app.example.test/api"}, ctx_nopub)
+            self.assertFalse(res.ok)
+            self.assertIn("scope", res.error)
+            opener_mock.assert_not_called()
+
+        # 3. Hop-by-hop redirect handler blocks encoded traversal and out-of-prefix redirects
+        handler = _ScopedRedirectHandler(ctx_prefix, [])
+        req = urllib.request.Request(f"{self.base}/api/start")
+        for loc in (f"{self.base}/api/%2e%2e/admin", "/admin"):
+            with self.assertRaises(ScopeViolation):
+                handler.redirect_request(req, None, 302, "Found", {}, loc)
+
     def test_web_search_offline_fails_cleanly(self):
         with mock.patch("urllib.request.urlopen",
                         side_effect=urllib.error.URLError("offline")):

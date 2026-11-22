@@ -1343,7 +1343,10 @@
     runs.sort((a, b) => String(b.started_at || "").localeCompare(String(a.started_at || "")));
     revokeBlobUrls();
     for (const run of runs.slice(0, 15)) {
-      const result = await fetchRaw(`/api/report/${encodeURIComponent(run.id)}`);
+      const [result, md] = await Promise.all([
+        fetchRaw(`/api/report/${encodeURIComponent(run.id)}`),
+        fetchRaw(`/api/report/${encodeURIComponent(run.id)}?format=md`),
+      ]);
       if (result.ok && result.text.trim()) {
         const cleaned = stripReportDuplicateHeading(result.text);
         state.reportHtml = cleaned;
@@ -1354,8 +1357,7 @@
         const htmlUrl = URL.createObjectURL(new Blob([cleaned], { type: "text/html" }));
         state.blobUrls.push(htmlUrl);
         let markdownUrl = null;
-        const md = await fetchRaw(`/api/projects/${encodeURIComponent(state.projectId)}/report`);
-        if (md.ok && md.text) {
+        if (md.ok && md.text.trim()) {
           state.reportMd = md.text;
           markdownUrl = URL.createObjectURL(new Blob([md.text], { type: "text/markdown" }));
           state.blobUrls.push(markdownUrl);
@@ -1363,8 +1365,24 @@
         setReportLinks(htmlUrl, markdownUrl);
         return;
       }
+      if (md.ok && md.text.trim()) {
+        const markdownBody = stripLeadingMarkdownHeading(md.text);
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>ARIA-X report</title>` +
+          `<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:36px auto;padding:0 20px;line-height:1.6;color:#1b2733;background:#fff}pre{white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:8px;font-size:13px}</style>` +
+          `</head><body><pre>${escapeHtml(markdownBody)}</pre></body></html>`;
+        state.reportHtml = "";
+        state.reportMd = md.text;
+        frame.srcdoc = html;
+        frame.hidden = false;
+        empty.hidden = true;
+        $("report-meta").textContent = `Run ${run.id} · ${run.status || "unknown"} · Markdown only (HTML pending)`;
+        const mdUrl = URL.createObjectURL(new Blob([md.text], { type: "text/markdown" }));
+        state.blobUrls.push(mdUrl);
+        setReportLinks(null, mdUrl);
+        return;
+      }
     }
-    // Fallback: markdown-only report (no HTML yet).
+    // Fallback: legacy project-level markdown report when no per-run report exists.
     const md = await fetchRaw(`/api/projects/${encodeURIComponent(state.projectId)}/report`);
     if (md.ok && md.text.trim()) {
       const markdownBody = stripLeadingMarkdownHeading(md.text);

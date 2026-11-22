@@ -656,20 +656,126 @@ def cmd_graph(args: argparse.Namespace) -> int:
         store.close()
 
 
+def _within_runs_root(candidate: Path, runs_root: Path) -> bool:
+    try:
+        candidate.resolve().relative_to(runs_root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _pick_report_in_dir(directory: Path, runs_root: Path) -> Path | None:
+    if not directory.is_dir() or not _within_runs_root(directory, runs_root):
+        return None
+    html = directory / "report.html"
+    md = directory / "report.md"
+    if html.is_file() and _within_runs_root(html, runs_root):
+        return html
+    if md.is_file() and _within_runs_root(md, runs_root):
+        return md
+    return None
+
+
+def _dir_report_mtime(directory: Path) -> float:
+    mtimes = []
+    for name in ("report.html", "report.md"):
+        p = directory / name
+        if p.is_file():
+            try:
+                mtimes.append(p.stat().st_mtime)
+            except OSError:
+                pass
+    return max(mtimes) if mtimes else 0.0
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     config = load_config(args)
     runs_dir = Path(config.runs_dir)
-    if args.run_id:
-        candidates = [runs_dir / args.run_id]
-    elif args.project_id:
-        candidates = sorted(runs_dir.glob(f"{args.project_id}*"), reverse=True)
-    else:
-        candidates = sorted([p for p in runs_dir.iterdir() if p.is_dir()], reverse=True) if runs_dir.is_dir() else []
+    if not runs_dir.is_dir():
+        print("[aria-x] no report found", file=sys.stderr)
+        return 2
+
+    store: Store | None = None
+    if config.db_path.is_file():
+        try:
+            store = open_store(config)
+        except Exception:
+            store = None
+
+    candidates: list[Path] = []
+    seen: set[str] = set()
+
+    def add_candidate(path: Path) -> None:
+        try:
+            key = str(path.resolve())
+        except OSError:
+            return
+        if key not in seen:
+            seen.add(key)
+            candidates.append(path)
+
+    try:
+        if args.run_id:
+            add_candidate(runs_dir / args.run_id)
+            if store is not None:
+                try:
+                    run = store.get_run(args.run_id)
+                except Exception:
+                    run = None
+                if run is not None:
+                    add_candidate(runs_dir / run.project_id / args.run_id)
+                    add_candidate(runs_dir / f"{run.project_id}-{args.run_id}")
+            for child in sorted(runs_dir.iterdir(), reverse=True):
+                if child.is_dir() and args.run_id in child.name:
+                    add_candidate(child)
+        elif args.project_id:
+            if store is not None:
+                try:
+                    for run in store.list_runs(args.project_id, limit=100):
+                        add_candidate(runs_dir / run.id)
+                        add_candidate(runs_dir / args.project_id / run.id)
+                except Exception:
+                    pass
+            fs_dirs: list[Path] = []
+            proj_dir = runs_dir / args.project_id
+            if proj_dir.is_dir():
+                fs_dirs.append(proj_dir)
+                for child in proj_dir.iterdir():
+                    if child.is_dir():
+                        fs_dirs.append(child)
+            for child in runs_dir.glob(f"{args.project_id}*"):
+                if child.is_dir():
+                    fs_dirs.append(child)
+            fs_dirs.sort(key=lambda d: (_dir_report_mtime(d), d.name), reverse=True)
+            for d in fs_dirs:
+                add_candidate(d)
+        else:
+            if store is not None:
+                try:
+                    for run in store.list_runs(limit=100):
+                        add_candidate(runs_dir / run.id)
+                        add_candidate(runs_dir / run.project_id / run.id)
+                except Exception:
+                    pass
+            fs_dirs = []
+            for child in runs_dir.iterdir():
+                if not child.is_dir():
+                    continue
+                if (child / "report.html").is_file() or (child / "report.md").is_file():
+                    fs_dirs.append(child)
+                for grand in child.iterdir():
+                    if grand.is_dir() and ((grand / "report.html").is_file() or (grand / "report.md").is_file()):
+                        fs_dirs.append(grand)
+            fs_dirs.sort(key=lambda d: (_dir_report_mtime(d), d.name), reverse=True)
+            for d in fs_dirs:
+                add_candidate(d)
+    finally:
+        if store is not None:
+            store.close()
+
     for candidate in candidates:
-        html = candidate / "report.html"
-        md = candidate / "report.md"
-        if html.is_file() or md.is_file():
-            target = html if html.is_file() else md
+        target = _pick_report_in_dir(candidate, runs_dir)
+        if target is not None:
             print(str(target))
             if args.open:
                 webbrowser.open(target.resolve().as_uri())

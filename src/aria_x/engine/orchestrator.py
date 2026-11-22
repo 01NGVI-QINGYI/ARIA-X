@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from .. import __version__
 from ..config import AriaXConfig, ScopeConfig
 from ..errors import AriaXError, BudgetExceeded, Cancelled, ConfigError
 from ..events import (
@@ -1163,7 +1164,7 @@ class Orchestrator:
             "counts": self.store.counts(self.project.id),
             "model": self.config.llm.model,
             "provider": self.config.llm.provider,
-            "version": "0.1.0",
+            "version": __version__,
         }
         report_error = ""
         writer = _load_write_report()

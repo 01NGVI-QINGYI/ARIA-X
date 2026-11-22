@@ -351,6 +351,14 @@ class ServerTestCase(unittest.TestCase):
         self.assertTrue(headers["Content-Type"].startswith("text/html"))
         self.assertIn(b"ARIA-X report", data)
 
+        status, headers, data = self.request("GET", f"/api/report/{run_id}?format=md")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["Content-Type"].startswith("text/markdown"))
+        self.assertIn(b"# ARIA-X report", data)
+
+        status, _, data = self.request("GET", f"/api/report/{run_id}?format=xml")
+        self.assertEqual(status, 400)
+
         status, headers, data = self.request("GET", f"/api/projects/{self.project.id}/report")
         self.assertEqual(status, 200)
         self.assertTrue(headers["Content-Type"].startswith("text/markdown"))

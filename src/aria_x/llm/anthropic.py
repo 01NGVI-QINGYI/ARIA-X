@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
@@ -78,6 +79,9 @@ class AnthropicProvider:
                            status=exc.code, retryable=exc.code in _RETRYABLE_STATUS) from exc
         except urllib.error.URLError as exc:
             raise LLMError(f"anthropic connection failed: {exc.reason}", provider=self.name,
+                           retryable=True) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise LLMError(f"anthropic timed out after {self.timeout}s", provider=self.name,
                            retryable=True) from exc
 
         try:

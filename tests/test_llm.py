@@ -251,6 +251,11 @@ class AnthropicConfigAndTimeoutTests(unittest.TestCase):
             "https://api.anthropic.com.corp-proxy/v1",
         ):
             AriaXConfig(llm=LLMConfig(provider="anthropic", base_url=gateway_url)).validate()
+        AriaXConfig(llm=LLMConfig(
+            provider="anthropic",
+            base_url="https://gateway.internal/v1",
+            extra_headers={"Authorization": "Basic dXNlcjpwYXNz"},
+        )).validate()
 
         for bad_cfg in (
             LLMConfig(provider="anthropic", api_key="   "),
@@ -259,6 +264,10 @@ class AnthropicConfigAndTimeoutTests(unittest.TestCase):
             LLMConfig(provider="anthropic", extra_headers={"Authorization": ""}),
             LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer"}),
             LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer   "}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Basic dXNlcjpwYXNz"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Token abc"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Digest xyz"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "raw-token"}),
         ):
             with self.assertRaises(ConfigError, msg=f"expected ConfigError for {bad_cfg}"):
                 AriaXConfig(llm=bad_cfg).validate()
@@ -267,6 +276,7 @@ class AnthropicConfigAndTimeoutTests(unittest.TestCase):
             LLMConfig(provider="anthropic", api_key="sk-ant-test"),
             LLMConfig(provider="anthropic", extra_headers={"x-api-key": "sk-ant-test"}),
             LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer tok-test"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "bearer tok-test"}),
         ):
             AriaXConfig(llm=good_cfg).validate()
 

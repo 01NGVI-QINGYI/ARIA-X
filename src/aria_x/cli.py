@@ -329,19 +329,44 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_demo_target() -> tuple[Path | None, Path | None]:
+    """Return ``(script_path, checkout_root)`` for ``cmd_demo``.
+
+    In a source checkout, prefers ``examples/demo_target.py`` and returns the
+    repo root so demo artifacts stay in ``./data`` and ``./runs``. In an
+    installed wheel (or when ``examples/`` is absent), falls back to the
+    packaged ``aria_x/demo_target.py`` module with ``checkout_root=None``.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    checkout_script = repo_root / "examples" / "demo_target.py"
+    if checkout_script.is_file() and (repo_root / "pyproject.toml").is_file():
+        return checkout_script, repo_root
+    packaged_script = Path(__file__).resolve().parent / "demo_target.py"
+    if packaged_script.is_file():
+        return packaged_script, None
+    return None, None
+
+
 def cmd_demo(args: argparse.Namespace) -> int:
-    root = Path(__file__).resolve().parents[2]
-    script = root / "examples" / "demo_target.py"
-    if not script.is_file():
-        print(f"[aria-x] demo target missing: {script}", file=sys.stderr)
+    script, checkout_root = _resolve_demo_target()
+    if script is None:
+        print("[aria-x] demo target missing: examples/demo_target.py or aria_x/demo_target.py",
+              file=sys.stderr)
         return 2
 
     from .demo import DemoPolicy, DemoTarget
     from .llm.mock import MockProvider
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    data_dir = root / "data" / f"demo-{stamp}"
-    runs_dir = root / "runs" / f"demo-{stamp}"
+    if checkout_root is not None and os.access(checkout_root, os.W_OK):
+        base_data = checkout_root / "data"
+        base_runs = checkout_root / "runs"
+    else:
+        env_data = os.environ.get("ARIA_X_DATA_DIR")
+        base_data = Path(env_data).expanduser() if env_data else (Path.cwd() / "data")
+        base_runs = Path.cwd() / "runs"
+    data_dir = base_data / f"demo-{stamp}"
+    runs_dir = base_runs / f"demo-{stamp}"
     config = AriaXConfig(
         name="ARIA-X demo",
         data_dir=str(data_dir),

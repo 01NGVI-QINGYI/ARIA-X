@@ -55,8 +55,10 @@ change, but persisted schema changes will include a migration note.
     no host secrets) across startup and `kill` cleanup.
 - **Report resolution, Web race guards & dynamic version**: Fixed `aria-x report` (CLI)
   to query runs strictly read-only (`mode=ro`, never initializing empty SQLite files),
-  match exact run/project IDs, reject conflicting DB/directory/metadata attribution,
-  and support both depth-2 nested archives (`demo-<stamp>/<run_id>`) and legacy flat
+  perform exact per-run DB attribution lookups without a recent-runs cap, match exact
+  run/project IDs, reject conflicting DB/directory/metadata attribution, and apply
+  unified archive recognition across no-arg, `<run_id>`, and `--project-id` modes for
+  depth-2 nested archives (`demo-<stamp>/<run_id>`) and legacy flat
   `<project_id>-<run_id>` archives; updated Web console `loadReport()`, `ensureGraph()`,
   and `selectProject()` with monotonic request-sequence and timer guards so stale or
   cross-project responses cannot overwrite the active project, while keeping preview

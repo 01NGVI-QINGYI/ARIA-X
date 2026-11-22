@@ -40,20 +40,30 @@ change, but persisted schema changes will include a migration note.
   source checkout.
 - **Security boundaries**:
   - `Scope`: stopped auto-adding permissive host rules for URL targets, normalized
-    default ports and `..` path traversal, separated `authorize_url` / `authorize_host`,
-    and wired `safety.allow_public_targets`.
+    default ports, enforced strict fail-closed URL path-prefix validation (rejecting
+    raw dot segments, single/multi-encoded `%2e`/`%2f`/`%5c`/`%00`, `;`, `\`, `//`,
+    malformed `%`, and control chars on initial requests and redirect hops), separated
+    `authorize_url` / `authorize_host`, wired `safety.allow_public_targets`, and failed
+    closed on unresolved hostnames when `allow_public_targets = false`.
   - `Sandbox`: wired `safety.extra_blocked_patterns` while keeping
     `block_destructive=True` enforced.
   - `SessionManager`: isolated PTY child environment via an explicit `_base_env()`
     allowlist, refused `session_open` when `sandbox.backend == "mock"`, honored `cwd`
-    inside `ctx.workdir`, and used `Session.docker_binary` during cleanup.
-- **Report resolution & dynamic version**: Fixed `aria-x report` (CLI) to resolve the
-  newest report by store `started_at` / file `mtime` within `runs_dir`; updated Web
-  console `loadReport()` to keep preview and Markdown download bound to the same run;
-  replaced hardcoded `"0.1.0"`/`"v0.1"` report versions with `__version__`.
-- **Anthropic provider**: Defaulted `base_url` to `https://api.anthropic.com`, added
-  official-endpoint auth validation while preserving custom gateways and `extra_headers`
-  authentication, and mapped socket/timeout errors to retryable `LLMError`.
+    inside `ctx.workdir` (including `-w /work/<subdir>` for Docker PTY), and passed
+    consistent `Session.docker_binary` + `_docker_client_env()` (`DOCKER_*` allowlist,
+    no host secrets) across startup and `kill` cleanup.
+- **Report resolution, Web race guards & dynamic version**: Fixed `aria-x report` (CLI)
+  to query runs strictly read-only (`mode=ro`, never initializing empty SQLite files),
+  match exact run/project IDs with provable project attribution, and support depth-2
+  nested archives (including `demo-<stamp>/<run_id>`); updated Web console
+  `loadReport()` and `selectProject()` with monotonic request-sequence guards so stale
+  or cross-project responses cannot overwrite the active project, while keeping preview
+  and Markdown download bound to the same run; replaced hardcoded `"0.1.0"`/`"v0.1"`
+  report versions with `__version__`.
+- **Anthropic provider**: Defaulted `base_url` to `https://api.anthropic.com`, parsed
+  hostname (`api.anthropic.com`) for official-endpoint detection with non-empty
+  `api_key` / `x-api-key` / `Authorization: Bearer` validation while preserving custom
+  gateways, and mapped socket/timeout errors to retryable `LLMError`.
 - **Docker metadata**: Replaced placeholder `org.opencontainers.image.source` URL in
   `docker/Dockerfile` with `https://github.com/01NGVI-QINGYI/ARIA-X`.
 

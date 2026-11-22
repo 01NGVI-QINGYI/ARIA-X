@@ -115,6 +115,8 @@ const ctx = {
     history: { replaceState: () => {} },
     scrollTo: () => {},
   },
+  setTimeout,
+  clearTimeout,
   localStorage: { getItem: () => "", setItem: () => {}, removeItem: () => {} },
   URL: {
     _blobs: {},
@@ -169,3 +171,193 @@ ctx.__TEST__.loadReport().then(() => {
         ], capture_output=True, text=True, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("WEB_REPORT_CONSISTENCY_OK", proc.stdout)
+
+    def test_web_report_race_guards_and_project_switching(self) -> None:
+        node = shutil.which("node") or "/opt/homebrew/bin/node"
+        if not Path(node).exists():
+            self.skipTest("node not installed")
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+const i18nCode = fs.readFileSync(process.argv[1], "utf8");
+const appCode = fs.readFileSync(process.argv[2], "utf8");
+
+const elements = {};
+function makeEl(id) {
+  return {
+    id, hidden: false, disabled: false, value: "", textContent: "", srcdoc: "", href: "",
+    className: "", children: [],
+    classList: { add() {}, remove() {}, toggle() {} },
+    setAttribute(k, v) { this[k] = v; },
+    removeAttribute(k) { delete this[k]; },
+    addEventListener() {},
+    querySelector() { return null; },
+    appendChild(c) { this.children.push(c); return c; },
+    replaceChildren(...cs) { this.children = cs; },
+  };
+}
+for (const id of [
+  "report-empty", "report-frame", "report-meta", "report-open", "report-markdown",
+  "project-select", "overview-empty", "overview-content", "project-name", "project-goal",
+  "run-id", "run-state", "run-chip", "btn-start", "btn-stop", "approval-list",
+  "approval-count", "conn-pill", "conn-text", "sse-status", "timeline-pulse",
+  "timeline-log", "timeline-empty", "timeline-count", "timeline-autoscroll", "timeline-type",
+]) {
+  elements[id] = makeEl(id);
+}
+
+const deferred = [];
+function nextDeferred(url) {
+  let res, rej;
+  const p = new Promise((r, j) => { res = r; rej = j; });
+  deferred.push({ url, res, rej });
+  return p;
+}
+
+const ctx = {
+  document: {
+    documentElement: { lang: "en" },
+    title: "",
+    getElementById: (id) => elements[id] || makeEl(id),
+    querySelectorAll: () => [],
+    createElement: (tag) => makeEl(tag),
+    addEventListener: () => {},
+  },
+  window: {
+    location: { hash: "#report" },
+    addEventListener: () => {},
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+    history: { replaceState: () => {} },
+    scrollTo: () => {},
+  },
+  setTimeout,
+  clearTimeout,
+  localStorage: { getItem: () => "", setItem: () => {}, removeItem: () => {} },
+  EventSource: class { close() {} },
+  URL: {
+    _blobs: {},
+    _revoked: new Set(),
+    createObjectURL(blob) {
+      const u = "blob:" + Object.keys(this._blobs).length;
+      this._blobs[u] = blob;
+      return u;
+    },
+    revokeObjectURL(u) { this._revoked.add(u); },
+  },
+  Blob: class Blob { constructor(parts, opts) { this.text = parts.join(""); this.type = opts && opts.type; } },
+  fetch: (url) => nextDeferred(url),
+  setTimeout,
+  clearTimeout,
+};
+Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+ctx.window.ARIA_X_I18N = undefined;
+vm.runInNewContext(i18nCode, ctx);
+const patched = appCode.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, loadReport, selectProject };\n})();");
+vm.runInNewContext(patched, ctx);
+
+function okResp(text) {
+  return { ok: true, status: 200, text: async () => text, headers: new Map() };
+}
+function notFound() {
+  return { ok: false, status: 404, text: async () => "", headers: new Map() };
+}
+function resolveByUrl(urlSubstring, resp) {
+  const idx = deferred.findIndex(d => d.url.includes(urlSubstring));
+  assert(idx !== -1, "missing deferred for " + urlSubstring);
+  const [item] = deferred.splice(idx, 1);
+  item.res(resp);
+}
+async function flush() {
+  for (let i = 0; i < 4; i += 1) await new Promise(r => setTimeout(r, 2));
+}
+
+(async () => {
+  const { state, loadReport, selectProject } = ctx.__TEST__;
+
+  // 1. Delayed cross-project response: A starts, user switches to B, B renders, A resolves late.
+  state.projectId = "projA";
+  state.detail = { project: { id: "projA" }, runs: [{ id: "runA", status: "completed", started_at: "2026-11-01T00:00:00Z" }] };
+  const pA = loadReport();
+
+  state.projectId = "projB";
+  state.detail = { project: { id: "projB" }, runs: [{ id: "runB", status: "completed", started_at: "2026-11-02T00:00:00Z" }] };
+  const pB = loadReport();
+
+  // Resolve B first
+  resolveByUrl("/api/report/runB?format=md", okResp("# MD B"));
+  resolveByUrl("/api/report/runB", okResp("<html><body><h1>Report B</h1></body></html>"));
+  await pB;
+  await flush();
+
+  assert(elements["report-meta"].textContent.includes("runB"));
+  assert(elements["report-frame"].srcdoc.includes("Report B"));
+  const bHtmlUrl = elements["report-open"].href;
+  const bMdUrl = elements["report-markdown"].href;
+  assert.strictEqual(ctx.URL._blobs[bMdUrl].text, "# MD B");
+
+  // Now resolve stale A
+  resolveByUrl("/api/report/runA?format=md", okResp("# MD A"));
+  resolveByUrl("/api/report/runA", okResp("<html><body><h1>Report A</h1></body></html>"));
+  await pA;
+  await flush();
+
+  assert.strictEqual(state.projectId, "projB");
+  assert(elements["report-meta"].textContent.includes("runB"), "stale A overwrote meta");
+  assert(elements["report-frame"].srcdoc.includes("Report B"), "stale A overwrote srcdoc");
+  assert(!elements["report-frame"].srcdoc.includes("Report A"), "stale A leaked into srcdoc");
+  assert.strictEqual(elements["report-open"].href, bHtmlUrl);
+  assert.strictEqual(elements["report-markdown"].href, bMdUrl);
+  assert(!ctx.URL._revoked.has(bHtmlUrl), "B html blob must not be revoked");
+  assert(!ctx.URL._revoked.has(bMdUrl), "B md blob must not be revoked");
+
+  // 2. Consecutive same-project refreshes: req1 slow, req2 fast
+  state.detail = { project: { id: "projB" }, runs: [{ id: "runB2", status: "completed", started_at: "2026-11-03T00:00:00Z" }] };
+  const p1 = loadReport();
+  const p2 = loadReport();
+  // There are two pairs of runB2 requests in deferred; resolve the second pair first
+  const idxHtml2 = deferred.map(d => d.url).lastIndexOf("/api/report/runB2");
+  const idxMd2 = deferred.map(d => d.url).lastIndexOf("/api/report/runB2?format=md");
+  deferred[idxMd2].res(okResp("# MD B2 NEW"));
+  deferred[idxHtml2].res(okResp("<html><body><h1>Report B2 NEW</h1></body></html>"));
+  await p2;
+  await flush();
+  assert(elements["report-frame"].srcdoc.includes("Report B2 NEW"));
+  // Resolve stale #1
+  resolveByUrl("/api/report/runB2?format=md", okResp("# MD B2 STALE"));
+  resolveByUrl("/api/report/runB2", okResp("<html><body><h1>Report B2 STALE</h1></body></html>"));
+  await p1;
+  await flush();
+  assert(elements["report-frame"].srcdoc.includes("Report B2 NEW"));
+  assert(!elements["report-frame"].srcdoc.includes("Report B2 STALE"));
+
+  // 3. Switch to project with no report (and clear to empty)
+  state.projectId = "projC";
+  state.detail = { project: { id: "projC" }, runs: [{ id: "runC", status: "completed", started_at: "2026-11-04T00:00:00Z" }] };
+  const pC = loadReport();
+  resolveByUrl("/api/report/runC?format=md", notFound());
+  resolveByUrl("/api/report/runC", notFound());
+  await flush();
+  resolveByUrl("/api/projects/projC/report", notFound());
+  await pC;
+  await flush();
+  assert.strictEqual(elements["report-frame"].hidden, true);
+  assert.strictEqual(elements["report-empty"].hidden, false);
+  assert.strictEqual(elements["report-open"]["aria-disabled"], "true");
+  assert.strictEqual(elements["report-markdown"]["aria-disabled"], "true");
+
+  // Clear project via selectProject("")
+  await selectProject("");
+  assert.strictEqual(elements["report-frame"].hidden, true);
+  assert.strictEqual(elements["report-empty"].hidden, false);
+  console.log("WEB_REPORT_RACE_OK");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+        proc = subprocess.run([
+            node, "-e", script,
+            str(ROOT / "src" / "aria_x" / "web" / "i18n.js"),
+            str(ROOT / "src" / "aria_x" / "web" / "app.js"),
+        ], capture_output=True, text=True, timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("WEB_REPORT_RACE_OK", proc.stdout)

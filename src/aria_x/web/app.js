@@ -77,11 +77,13 @@
     es: null,
     pollTimer: null,
     refreshing: false,
+    refreshSeq: 0,
     graphRefreshTimer: null,
     authWarned: false,
     reportHtml: "",
     reportMd: "",
     reportMeta: { kind: "initial", run: null },
+    reportSeq: 0,
     blobUrls: [],
   };
 
@@ -388,17 +390,25 @@
     localStorage.setItem(STORAGE.project, state.projectId);
     const select = $("project-select");
     if (select) select.value = state.projectId;
+    state.refreshSeq += 1;
+    state.refreshing = false;
     state.detail = null;
     state.graph = null;
     state.run = null;
+    state.findings = [];
+    state.assets = [];
+    state.todos = [];
+    state.approvals = [];
+    state.currentRunId = "";
     state.selectedNodeId = "";
     state.selectedFindingId = "";
     state.events = [];
     state.eventTypes = new Set();
     renderTimelineEvents();
+    resetReportView(state.projectId ? "initial" : "noProject");
     if (!state.projectId) { clearProject(); return; }
     connectSSE();
-    await refreshProject({ full: true });
+    await refreshProject({ full: true, force: true });
   }
 
   function clearProject() {
@@ -414,15 +424,20 @@
     $("btn-stop").disabled = true;
     $("approval-list").replaceChildren(el("p", "muted", t("approvals.selectFirst")));
     $("approval-count").textContent = t("approvals.pending", { count: 0 });
+    resetReportView("noProject");
     if (state.es) { state.es.close(); state.es = null; }
     setSseStatus(false);
   }
 
-  async function refreshProject({ full = false } = {}) {
-    if (!state.projectId || state.refreshing) return;
+  async function refreshProject({ full = false, force = false } = {}) {
+    if (!state.projectId) return;
+    if (state.refreshing && !force) return;
+    const projectId = state.projectId;
+    const reqSeq = ++state.refreshSeq;
     state.refreshing = true;
     try {
-      const detail = await api(`/api/projects/${encodeURIComponent(state.projectId)}`);
+      const detail = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+      if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
       state.detail = detail;
       state.findings = Array.isArray(detail.findings) ? detail.findings : [];
       state.assets = Array.isArray(detail.assets) ? detail.assets : [];
@@ -436,23 +451,35 @@
         // and elapsed readout correct even if that second request is slow.
         state.run = { run: active, tasks: [], budget: active.budget || {}, usage: active.usage || {} };
         try {
-          const full = await api(`/api/runs/${encodeURIComponent(active.id)}`);
-          if (full) state.run = full;
+          const fullRun = await api(`/api/runs/${encodeURIComponent(active.id)}`);
+          if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+          if (fullRun) state.run = fullRun;
         } catch { /* keep the aggregate fallback */ }
       } else {
         state.currentRunId = "";
         state.run = null;
       }
+      if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
       try {
-        state.approvals = await api(`/api/approvals?project_id=${encodeURIComponent(state.projectId)}`);
-      } catch { state.approvals = []; }
+        const approvals = await api(`/api/approvals?project_id=${encodeURIComponent(projectId)}`);
+        if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+        state.approvals = approvals;
+      } catch {
+        if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+        state.approvals = [];
+      }
       renderOverview();
       renderFindings();
       renderAssets();
       renderTodos();
-      if (state.tab === "graph") { await ensureGraph(); renderGraph(); }
+      if (state.tab === "graph") {
+        await ensureGraph();
+        if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
+        renderGraph();
+      }
       if (full && state.tab === "report") { await loadReport(); }
     } catch (error) {
+      if (reqSeq !== state.refreshSeq || projectId !== state.projectId) return;
       if (error.status === 404) {
         toast(t("toast.engagementMissing"), "warn");
         await loadProjects();
@@ -460,7 +487,7 @@
         toast(t("toast.refreshFailed", { message: error.message }), "bad");
       }
     } finally {
-      state.refreshing = false;
+      if (reqSeq === state.refreshSeq) state.refreshing = false;
     }
   }
 
@@ -1428,39 +1455,65 @@
     }
   }
 
+  function resetReportView(metaKind = "empty", { invalidate = true } = {}) {
+    if (invalidate) state.reportSeq += 1;
+    revokeBlobUrls();
+    state.reportHtml = "";
+    state.reportMd = "";
+    state.reportMeta = { kind: metaKind, run: null };
+    const frame = $("report-frame");
+    const empty = $("report-empty");
+    if (frame) {
+      frame.hidden = true;
+      frame.removeAttribute("srcdoc");
+    }
+    if (empty) empty.hidden = false;
+    renderReportMeta();
+    setReportLinks(null, null);
+  }
+
   async function loadReport() {
-    if (!state.projectId) {
-      $("report-empty").hidden = false;
-      $("report-frame").hidden = true;
-      state.reportMeta = { kind: "noProject", run: null };
-      renderReportMeta();
+    const projectId = state.projectId;
+    const reqSeq = ++state.reportSeq;
+    const isCurrent = () => reqSeq === state.reportSeq && projectId === state.projectId;
+
+    if (!projectId) {
+      resetReportView("noProject", { invalidate: false });
       return;
     }
     const frame = $("report-frame");
     const empty = $("report-empty");
-    // Deep-linking to #report can happen before any project detail exists.
-    if (!state.detail) {
-      await refreshProject();
-    }
-    let runs = ((state.detail && state.detail.runs) || []).slice();
+    let detailForProject =
+      state.detail && state.detail.project && state.detail.project.id === projectId
+        ? state.detail
+        : null;
+    let runs = (detailForProject && Array.isArray(detailForProject.runs))
+      ? detailForProject.runs.slice()
+      : [];
     if (!runs.length) {
       try {
-        const detail = await api(`/api/projects/${encodeURIComponent(state.projectId)}`);
+        const detail = await api(`/api/projects/${encodeURIComponent(projectId)}`);
+        if (!isCurrent()) return;
         state.detail = detail;
         runs = Array.isArray(detail.runs) ? detail.runs.slice() : [];
-      } catch { runs = []; }
+      } catch {
+        if (!isCurrent()) return;
+        runs = [];
+      }
     }
     // Prefer completed runs with reports, newest first.
     runs.sort((a, b) => String(b.started_at || "").localeCompare(String(a.started_at || "")));
-    revokeBlobUrls();
     for (const run of runs.slice(0, 15)) {
       const [result, md] = await Promise.all([
         fetchRaw(`/api/report/${encodeURIComponent(run.id)}`),
         fetchRaw(`/api/report/${encodeURIComponent(run.id)}?format=md`),
       ]);
+      if (!isCurrent()) return;
       if (result.ok && result.text.trim()) {
         const cleaned = stripReportDuplicateHeading(result.text);
+        revokeBlobUrls();
         state.reportHtml = cleaned;
+        state.reportMd = "";
         frame.srcdoc = cleaned;
         frame.hidden = false;
         empty.hidden = true;
@@ -1482,6 +1535,7 @@
         const html = `<!doctype html><html><head><meta charset="utf-8"><title>ARIA-X report</title>` +
           `<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:36px auto;padding:0 20px;line-height:1.6;color:#1b2733;background:#fff}pre{white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:8px;font-size:13px}</style>` +
           `</head><body><pre>${escapeHtml(markdownBody)}</pre></body></html>`;
+        revokeBlobUrls();
         state.reportHtml = "";
         state.reportMd = md.text;
         frame.srcdoc = html;
@@ -1496,12 +1550,16 @@
       }
     }
     // Fallback: legacy project-level markdown report when no per-run report exists.
-    const md = await fetchRaw(`/api/projects/${encodeURIComponent(state.projectId)}/report`);
+    const md = await fetchRaw(`/api/projects/${encodeURIComponent(projectId)}/report`);
+    if (!isCurrent()) return;
     if (md.ok && md.text.trim()) {
       const markdownBody = stripLeadingMarkdownHeading(md.text);
       const html = `<!doctype html><html><head><meta charset="utf-8"><title>ARIA-X report</title>` +
         `<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:36px auto;padding:0 20px;line-height:1.6;color:#1b2733;background:#fff}pre{white-space:pre-wrap;background:#f4f7fa;padding:16px;border-radius:8px;font-size:13px}</style>` +
         `</head><body><pre>${escapeHtml(markdownBody)}</pre></body></html>`;
+      revokeBlobUrls();
+      state.reportHtml = "";
+      state.reportMd = md.text;
       frame.srcdoc = html;
       frame.hidden = false;
       empty.hidden = true;
@@ -1512,12 +1570,8 @@
       setReportLinks(null, mdUrl);
       return;
     }
-    frame.hidden = true;
-    frame.removeAttribute("srcdoc");
-    empty.hidden = false;
-    state.reportMeta = { kind: "empty", run: null };
-    renderReportMeta();
-    setReportLinks(null, null);
+    if (!isCurrent()) return;
+    resetReportView("empty", { invalidate: false });
   }
 
   // ---------------------------------------------------------------- settings

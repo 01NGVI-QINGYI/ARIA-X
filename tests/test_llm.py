@@ -246,6 +246,30 @@ class AnthropicConfigAndTimeoutTests(unittest.TestCase):
         )
         cfg_custom_gateway.validate()
 
+        for gateway_url in (
+            "https://gateway.internal/proxy/api.anthropic.com/v1",
+            "https://api.anthropic.com.corp-proxy/v1",
+        ):
+            AriaXConfig(llm=LLMConfig(provider="anthropic", base_url=gateway_url)).validate()
+
+        for bad_cfg in (
+            LLMConfig(provider="anthropic", api_key="   "),
+            LLMConfig(provider="anthropic", extra_headers={"x-api-key": ""}),
+            LLMConfig(provider="anthropic", extra_headers={"x-api-key": "   "}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": ""}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer   "}),
+        ):
+            with self.assertRaises(ConfigError, msg=f"expected ConfigError for {bad_cfg}"):
+                AriaXConfig(llm=bad_cfg).validate()
+
+        for good_cfg in (
+            LLMConfig(provider="anthropic", api_key="sk-ant-test"),
+            LLMConfig(provider="anthropic", extra_headers={"x-api-key": "sk-ant-test"}),
+            LLMConfig(provider="anthropic", extra_headers={"Authorization": "Bearer tok-test"}),
+        ):
+            AriaXConfig(llm=good_cfg).validate()
+
     def test_anthropic_timeout_raises_retryable_llm_error(self) -> None:
         from unittest import mock
         from aria_x.llm.anthropic import AnthropicProvider

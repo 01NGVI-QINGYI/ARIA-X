@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import errno
 import os
+import posixpath
 import select
 import signal
 import subprocess
@@ -56,6 +57,27 @@ MAX_IDLE_SECONDS = 1800.0
 KILL_GRACE = 2.0
 
 
+_DOCKER_CLIENT_ENV_KEYS = (
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_API_VERSION",
+    "CONTAINER_HOST",
+)
+
+
+def _docker_client_env() -> dict[str, str]:
+    """Minimal environment for the host Docker/Podman CLI (no host secrets)."""
+    env = _base_env()
+    for key in _DOCKER_CLIENT_ENV_KEYS:
+        if key in os.environ:
+            env[key] = os.environ[key]
+    env.setdefault("TERM", "xterm-256color")
+    return env
+
+
 @dataclass
 class Session:
     """One live interactive process."""
@@ -68,6 +90,7 @@ class Session:
     backend: str
     container: str = ""
     docker_binary: str = "docker"
+    client_env: dict[str, str] | None = None
     created_at: str = field(default_factory=now_iso)
     last_used: float = field(default_factory=time.monotonic)
     buffer: bytearray = field(default_factory=bytearray)
@@ -183,17 +206,25 @@ class SessionManager:
 
         container = ""
         docker_binary = "docker"
+        client_env: dict[str, str] | None = None
         if backend == "docker":
             container = "aria-x-sess-" + os.urandom(4).hex()
             docker_binary = str(getattr(ctx.config.sandbox, "docker_binary", "") or "docker")
-            argv = self._docker_argv(ctx, container, command)
+            rel_cwd = effective_cwd.relative_to(base_workdir)
+            container_workdir = (
+                "/work"
+                if str(rel_cwd) in ("", ".")
+                else posixpath.join("/work", rel_cwd.as_posix())
+            )
+            argv = self._docker_argv(ctx, container, command, container_workdir=container_workdir)
+            env = _docker_client_env()
+            client_env = dict(env)
         else:
             argv = ["/bin/bash", "-lc", command]
-
-        env = _base_env()
-        env.update(dict(getattr(ctx.config.sandbox, "env", None) or {}))
-        env.setdefault("TERM", "xterm-256color")
-        env["ARIA_X_SESSION"] = "1"
+            env = _base_env()
+            env.update(dict(getattr(ctx.config.sandbox, "env", None) or {}))
+            env.setdefault("TERM", "xterm-256color")
+            env["ARIA_X_SESSION"] = "1"
 
         if _pty is not None:
             master, slave = _pty.openpty()
@@ -215,19 +246,27 @@ class SessionManager:
 
         session = Session(id=new_id("s", 10), name=name or command.split()[0][:40],
                           command=command, proc=proc, fd=fd, backend=backend,
-                          container=container, docker_binary=docker_binary)
+                          container=container, docker_binary=docker_binary,
+                          client_env=client_env)
         with self._lock:
             self._sessions[session.id] = session
         # Give the process a moment to print its banner/prompt.
         session.pump(self.banner_wait)
         return session
 
-    def _docker_argv(self, ctx: ToolContext, container: str, command: str) -> list[str]:
+    def _docker_argv(
+        self,
+        ctx: ToolContext,
+        container: str,
+        command: str,
+        *,
+        container_workdir: str = "/work",
+    ) -> list[str]:
         cfg = ctx.config.sandbox
         docker = cfg.docker_binary or "docker"
         argv = [docker, "run", "--rm", "-i", "-t", "--name", container,
                 "--network", cfg.network,
-                "-v", f"{Path(ctx.workdir).resolve()}:/work", "-w", "/work"]
+                "-v", f"{Path(ctx.workdir).resolve()}:/work", "-w", container_workdir]
         for key, value in (cfg.env or {}).items():
             argv += ["-e", f"{key}={value}"]
         argv += list(cfg.extra_args or [])
@@ -287,7 +326,7 @@ class SessionManager:
         if session.container:
             try:
                 subprocess.run([session.docker_binary or "docker", "kill", session.container],
-                               capture_output=True, timeout=10)
+                               capture_output=True, timeout=10, env=session.client_env)
             except Exception:
                 pass
         info = session.info()

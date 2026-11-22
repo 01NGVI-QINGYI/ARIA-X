@@ -22,6 +22,7 @@ import os
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 from .errors import ConfigError
 from .util import as_list, json_loads, normalize_base_url, parse_bool
@@ -226,10 +227,10 @@ class AriaXConfig:
                 and "127.0.0.1" not in self.llm.resolved_base_url():
             raise ConfigError("llm.api_key is required (or set ARIA_X_API_KEY)")
         if self.llm.provider == "anthropic":
-            resolved = self.llm.resolved_base_url().lower()
-            header_keys = {str(k).lower() for k in (self.llm.extra_headers or {})}
-            has_custom_auth = bool(header_keys & {"x-api-key", "authorization"})
-            if "api.anthropic.com" in resolved and not self.llm.api_key and not has_custom_auth:
+            host = (urlsplit(self.llm.resolved_base_url()).hostname or "").strip().lower().rstrip(".")
+            has_api_key = bool(str(self.llm.api_key or "").strip())
+            has_custom_auth = _has_nonempty_auth_header(self.llm.extra_headers)
+            if host == "api.anthropic.com" and not has_api_key and not has_custom_auth:
                 raise ConfigError("llm.api_key is required for Anthropic (or set ARIA_X_API_KEY)")
         if self.sandbox.backend not in {"local", "docker", "mock"}:
             raise ConfigError(f"unsupported sandbox.backend '{self.sandbox.backend}'")
@@ -310,6 +311,23 @@ def _coerce(value: Any, template: Any) -> Any:
     if isinstance(template, dict):
         return dict(value) if isinstance(value, Mapping) else template
     return value
+
+
+def _has_nonempty_auth_header(headers: Mapping[str, Any] | None) -> bool:
+    for key, value in (headers or {}).items():
+        lk = str(key).strip().lower()
+        val = str(value or "").strip()
+        if lk == "x-api-key" and bool(val):
+            return True
+        if lk == "authorization" and bool(val):
+            low = val.lower()
+            if low == "bearer" or low.startswith(("bearer ", "bearer\t")):
+                parts = val.split(None, 1)
+                if len(parts) == 2 and bool(parts[1].strip()):
+                    return True
+            else:
+                return True
+    return False
 
 
 def _apply_section(section: Any, values: Mapping[str, Any]) -> None:

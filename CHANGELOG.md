@@ -42,9 +42,10 @@ change, but persisted schema changes will include a migration note.
   - `Scope`: stopped auto-adding permissive host rules for URL targets, normalized
     default ports, enforced strict fail-closed URL path-prefix validation (rejecting
     raw dot segments, single/multi-encoded `%2e`/`%2f`/`%5c`/`%00`, `;`, `\`, `//`,
-    malformed `%`, and control chars on initial requests and redirect hops), separated
-    `authorize_url` / `authorize_host`, wired `safety.allow_public_targets`, and failed
-    closed on unresolved hostnames when `allow_public_targets = false`.
+    malformed `%`, control chars, and paths exceeding the percent-decoding limit on
+    initial requests and redirect hops), separated `authorize_url` / `authorize_host`,
+    wired `safety.allow_public_targets`, and failed closed on unresolved hostnames when
+    `allow_public_targets = false`.
   - `Sandbox`: wired `safety.extra_blocked_patterns` while keeping
     `block_destructive=True` enforced.
   - `SessionManager`: isolated PTY child environment via an explicit `_base_env()`
@@ -54,16 +55,18 @@ change, but persisted schema changes will include a migration note.
     no host secrets) across startup and `kill` cleanup.
 - **Report resolution, Web race guards & dynamic version**: Fixed `aria-x report` (CLI)
   to query runs strictly read-only (`mode=ro`, never initializing empty SQLite files),
-  match exact run/project IDs with provable project attribution, and support depth-2
-  nested archives (including `demo-<stamp>/<run_id>`); updated Web console
-  `loadReport()` and `selectProject()` with monotonic request-sequence guards so stale
-  or cross-project responses cannot overwrite the active project, while keeping preview
+  match exact run/project IDs, reject conflicting DB/directory/metadata attribution,
+  and support both depth-2 nested archives (`demo-<stamp>/<run_id>`) and legacy flat
+  `<project_id>-<run_id>` archives; updated Web console `loadReport()`, `ensureGraph()`,
+  and `selectProject()` with monotonic request-sequence and timer guards so stale or
+  cross-project responses cannot overwrite the active project, while keeping preview
   and Markdown download bound to the same run; replaced hardcoded `"0.1.0"`/`"v0.1"`
   report versions with `__version__`.
 - **Anthropic provider**: Defaulted `base_url` to `https://api.anthropic.com`, parsed
   hostname (`api.anthropic.com`) for official-endpoint detection with non-empty
-  `api_key` / `x-api-key` / `Authorization: Bearer` validation while preserving custom
-  gateways, and mapped socket/timeout errors to retryable `LLMError`.
+  `api_key` / `x-api-key` / `Authorization: Bearer` validation (rejecting unsupported
+  schemes on the official endpoint while preserving custom gateways), and mapped
+  socket/timeout errors to retryable `LLMError`.
 - **Docker metadata**: Replaced placeholder `org.opencontainers.image.source` URL in
   `docker/Dockerfile` with `https://github.com/01NGVI-QINGYI/ARIA-X`.
 

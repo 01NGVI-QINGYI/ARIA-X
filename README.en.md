@@ -225,8 +225,8 @@ Inspect persisted results after completion:
 ./aria-x projects                               # list projects
 ./aria-x graph                                  # inspect the blackboard summary of the latest project
 ./aria-x report                                 # print the latest report path (--open to view)
-./aria-x report <run_id>                        # look up a report by exact run ID
-./aria-x report --project-id <project_id>       # look up the latest report for a project ID
+./aria-x report "$RUN_ID"                       # set RUN_ID first to look up a report by exact run ID
+./aria-x report --project-id "$PROJECT_ID"      # set PROJECT_ID first to look up the latest report for a project
 ./aria-x export -o out.json                     # export full project graph and evidence as JSON
 ```
 

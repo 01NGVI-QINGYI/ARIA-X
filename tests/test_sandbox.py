@@ -106,6 +106,18 @@ class LocalSandboxTests(unittest.TestCase):
         self.assertTrue(result.timed_out)
         self.assertNotEqual(result.exit_code, 0)
 
+    def test_extra_blocked_patterns_and_destructive_guard_always_on(self):
+        from aria_x.tools.sandbox import build_sandbox
+        sb = build_sandbox(SandboxConfig(backend="local"), self.workdir,
+                           extra_blocked_patterns=[r"\bnc\s+-e\b"])
+        self.assertEqual(sb.run("nc -e /bin/sh 127.0.0.1 4444").exit_code, 126)
+        self.assertEqual(sb.run("mkfs.ext4 /dev/sda1").exit_code, 126)
+
+    def test_compose_requires_explicit_auth_token(self):
+        compose = (Path(__file__).resolve().parents[1] / "docker" / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertNotIn("change-me-before-use", compose)
+        self.assertIn("ARIA_X_AUTH_TOKEN: \"${ARIA_X_AUTH_TOKEN:?", compose)
+
 
 if __name__ == "__main__":
     unittest.main()

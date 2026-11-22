@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
+  <a class="skip-link" href="#main" data-i18n="skip.toContent">Skip to content</a>
 
   <header class="topbar">
     <div class="brand">
@@ -28,52 +28,53 @@
       </svg>
       <div class="brand-text">
         <span class="brand-name">ARIA-X</span>
-        <span class="brand-sub">Autonomous Reasoning &amp; Investigation Agent, eXtended</span>
+        <span class="brand-sub" data-i18n="brand.sub">Autonomous Reasoning &amp; Investigation Agent, eXtended</span>
       </div>
     </div>
 
     <div class="topbar-controls">
       <label class="field inline" for="project-select">
-        <span class="field-label">Engagement</span>
+        <span class="field-label" data-i18n="topbar.engagement">Engagement</span>
         <select id="project-select" class="select" autocomplete="off">
-          <option value="">No projects yet</option>
+          <option value="" data-i18n="topbar.noProjects">No projects yet</option>
         </select>
       </label>
-      <span id="run-chip" class="chip idle" title="Current run status">
+      <span id="run-chip" class="chip idle" title="Current run status" data-i18n-title="topbar.runStatusTitle">
         <span class="dot"></span><span id="run-chip-text">idle</span>
       </span>
-      <button id="btn-refresh" class="btn ghost" type="button" title="Refresh data (R)">
-        <span class="btn-icon" aria-hidden="true">↻</span> Refresh
+      <button id="btn-refresh" class="btn ghost" type="button" title="Refresh data (R)" data-i18n-title="topbar.refreshTitle">
+        <span class="btn-icon" aria-hidden="true">↻</span> <span data-i18n="topbar.refresh">Refresh</span>
       </button>
       <button id="btn-settings" class="btn ghost icon-only" type="button"
-              aria-label="Open settings" title="Settings">⚙</button>
-      <span id="conn-pill" class="chip idle" title="Live event stream status">
+              aria-label="Open settings" title="Settings"
+              data-i18n-aria-label="topbar.settingsAria" data-i18n-title="topbar.settingsTitle">⚙</button>
+      <span id="conn-pill" class="chip idle" title="Live event stream status" data-i18n-title="topbar.streamTitle">
         <span class="dot"></span><span id="conn-text">offline</span>
       </span>
     </div>
   </header>
 
-  <nav class="tabs" role="tablist" aria-label="Console sections">
+  <nav class="tabs" role="tablist" aria-label="Console sections" data-i18n-aria-label="tabs.navAria">
     <button class="tab" id="tab-overview" role="tab" aria-selected="true"
-            aria-controls="panel-overview" data-tab="overview" tabindex="0">Overview</button>
+            aria-controls="panel-overview" data-tab="overview" tabindex="0" data-i18n="tabs.overview">Overview</button>
     <button class="tab" id="tab-graph" role="tab" aria-selected="false"
-            aria-controls="panel-graph" data-tab="graph" tabindex="-1">Graph</button>
+            aria-controls="panel-graph" data-tab="graph" tabindex="-1" data-i18n="tabs.graph">Graph</button>
     <button class="tab" id="tab-findings" role="tab" aria-selected="false"
             aria-controls="panel-findings" data-tab="findings" tabindex="-1">
-      Findings <span class="tab-badge" id="tab-findings-count" hidden></span>
+      <span data-i18n="tabs.findings">Findings</span> <span class="tab-badge" id="tab-findings-count" hidden></span>
     </button>
     <button class="tab" id="tab-assets" role="tab" aria-selected="false"
-            aria-controls="panel-assets" data-tab="assets" tabindex="-1">Assets</button>
+            aria-controls="panel-assets" data-tab="assets" tabindex="-1" data-i18n="tabs.assets">Assets</button>
     <button class="tab" id="tab-timeline" role="tab" aria-selected="false"
             aria-controls="panel-timeline" data-tab="timeline" tabindex="-1">
-      Timeline <span class="pulse-dot" id="timeline-pulse" aria-hidden="true"></span>
+      <span data-i18n="tabs.timeline">Timeline</span> <span class="pulse-dot" id="timeline-pulse" aria-hidden="true"></span>
     </button>
     <button class="tab" id="tab-todos" role="tab" aria-selected="false"
-            aria-controls="panel-todos" data-tab="todos" tabindex="-1">Todos</button>
+            aria-controls="panel-todos" data-tab="todos" tabindex="-1" data-i18n="tabs.todos">Todos</button>
     <button class="tab" id="tab-report" role="tab" aria-selected="false"
-            aria-controls="panel-report" data-tab="report" tabindex="-1">Report</button>
+            aria-controls="panel-report" data-tab="report" tabindex="-1" data-i18n="tabs.report">Report</button>
     <button class="tab" id="tab-settings" role="tab" aria-selected="false"
-            aria-controls="panel-settings" data-tab="settings" tabindex="-1">Settings</button>
+            aria-controls="panel-settings" data-tab="settings" tabindex="-1" data-i18n="tabs.settings">Settings</button>
   </nav>
 
   <main id="main" class="main" tabindex="-1">
@@ -82,16 +83,16 @@
     <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview" tabindex="0">
       <div id="overview-empty" class="empty-state">
         <div class="empty-icon" aria-hidden="true">◈</div>
-        <h2>No engagement selected</h2>
-        <p>Create an engagement to start an authorized autonomous security assessment.</p>
-        <button class="btn primary" type="button" id="empty-create-jump">Create engagement</button>
+        <h2 data-i18n="overview.emptyTitle">No engagement selected</h2>
+        <p data-i18n="overview.emptyDesc">Create an engagement to start an authorized autonomous security assessment.</p>
+        <button class="btn primary" type="button" id="empty-create-jump" data-i18n="overview.emptyAction">Create engagement</button>
       </div>
 
       <div id="overview-content" class="stack" hidden>
         <div class="grid two">
           <section class="card hero-card">
             <div class="card-head">
-              <h2 class="card-title">Engagement</h2>
+              <h2 class="card-title" data-i18n="overview.engagementCard">Engagement</h2>
               <span id="project-status" class="chip ok">active</span>
             </div>
             <h3 id="project-name" class="project-name">—</h3>
@@ -101,50 +102,50 @@
 
           <section class="card run-card">
             <div class="card-head">
-              <h2 class="card-title">Run control</h2>
+              <h2 class="card-title" data-i18n="overview.runControl">Run control</h2>
               <span id="run-state" class="chip idle">created</span>
             </div>
             <div class="run-ids">
-              <span class="k">run</span><code id="run-id">—</code>
-              <span class="k">elapsed</span><span id="run-elapsed">—</span>
+              <span class="k" data-i18n="overview.runIdLabel">run</span><code id="run-id">—</code>
+              <span class="k" data-i18n="overview.elapsedLabel">elapsed</span><span id="run-elapsed">—</span>
             </div>
             <label class="field" for="run-goal">
-              <span class="field-label">Run goal <span class="muted">(optional override)</span></span>
+              <span class="field-label"><span data-i18n="overview.runGoalLabel">Run goal</span> <span class="muted" data-i18n="overview.runGoalOptional">(optional override)</span></span>
               <textarea id="run-goal" class="input textarea" rows="2"
-                        placeholder="Defaults to the project goal…"></textarea>
+                        placeholder="Defaults to the project goal…" data-i18n-placeholder="overview.runGoalPlaceholder"></textarea>
             </label>
             <div class="button-row">
               <button id="btn-start" class="btn primary" type="button">
-                <span aria-hidden="true">▶</span> Start run
+                <span aria-hidden="true">▶</span> <span data-i18n="overview.startRun">Start run</span>
               </button>
               <button id="btn-stop" class="btn danger" type="button" disabled>
-                <span aria-hidden="true">■</span> Stop run
+                <span aria-hidden="true">■</span> <span data-i18n="overview.stopRun">Stop run</span>
               </button>
-              <span class="hint-text" id="run-hint">Ctrl+Enter in the goal box starts a run.</span>
+              <span class="hint-text" id="run-hint" data-i18n="overview.runHint">Ctrl+Enter in the goal box starts a run.</span>
             </div>
             <div class="tasks" id="run-tasks-wrap" hidden>
-              <h3 class="sub-title">Tasks</h3>
+              <h3 class="sub-title" data-i18n="overview.tasksTitle">Tasks</h3>
               <ul class="task-list" id="run-tasks"></ul>
             </div>
           </section>
         </div>
 
-        <section class="stats-grid" id="overview-stats" aria-label="Engagement counters"></section>
+        <section class="stats-grid" id="overview-stats" aria-label="Engagement counters" data-i18n-aria-label="overview.statsAria"></section>
 
         <div class="grid two">
           <section class="card">
             <div class="card-head">
-              <h2 class="card-title">Budget</h2>
-              <span class="muted" id="budget-note">live accounting</span>
+              <h2 class="card-title" data-i18n="budget.title">Budget</h2>
+              <span class="muted" id="budget-note" data-i18n="budget.note">live accounting</span>
             </div>
             <div id="budget-bars" class="budget-bars">
-              <p class="muted">No budget data yet — start a run.</p>
+              <p class="muted" data-i18n="budget.empty">No budget data yet — start a run.</p>
             </div>
           </section>
 
           <section class="card">
             <div class="card-head">
-              <h2 class="card-title">Approval queue</h2>
+              <h2 class="card-title" data-i18n="approvals.title">Approval queue</h2>
               <span class="chip warn" id="approval-count">0 pending</span>
             </div>
             <div id="approval-list" class="approval-list">
@@ -156,50 +157,52 @@
         <div class="grid two">
           <section class="card">
             <div class="card-head">
-              <h2 class="card-title">Human hint</h2>
-              <span class="muted">steers the next planning round</span>
+              <h2 class="card-title" data-i18n="hint.title">Human hint</h2>
+              <span class="muted" data-i18n="hint.subtitle">steers the next planning round</span>
             </div>
             <form id="hint-form" class="stack tight" autocomplete="off">
               <label class="field" for="hint-input">
-                <span class="field-label">Hint content</span>
+                <span class="field-label" data-i18n="hint.label">Hint content</span>
                 <textarea id="hint-input" class="input textarea" rows="3" required
-                          placeholder="e.g. Try the /backup directory; the login flow looks custom."></textarea>
+                          placeholder="e.g. Try the /backup directory; the login flow looks custom."
+                          data-i18n-placeholder="hint.placeholder"></textarea>
               </label>
               <div class="button-row">
-                <button class="btn" type="submit" id="hint-submit">Send hint</button>
-                <span class="hint-text">Recorded as a blackboard hint and a chat message.</span>
+                <button class="btn" type="submit" id="hint-submit" data-i18n="hint.submit">Send hint</button>
+                <span class="hint-text" data-i18n="hint.note">Recorded as a blackboard hint and a chat message.</span>
               </div>
             </form>
           </section>
 
           <section class="card">
             <div class="card-head">
-              <h2 class="card-title">New engagement</h2>
-              <span class="muted">authorized targets only</span>
+              <h2 class="card-title" data-i18n="create.title">New engagement</h2>
+              <span class="muted" data-i18n="create.subtitle">authorized targets only</span>
             </div>
             <form id="create-form" class="stack tight" autocomplete="off">
               <div class="form-row">
                 <label class="field" for="new-name">
-                  <span class="field-label">Name</span>
+                  <span class="field-label" data-i18n="create.nameLabel">Name</span>
                   <input id="new-name" class="input" type="text" required maxlength="120"
-                         placeholder="Staging lab">
+                         placeholder="Staging lab" data-i18n-placeholder="create.namePlaceholder">
                 </label>
                 <label class="field" for="new-targets">
-                  <span class="field-label">Targets <span class="muted">(comma separated)</span></span>
+                  <span class="field-label"><span data-i18n="create.targetsLabel">Targets</span> <span class="muted" data-i18n="create.targetsHint">(comma separated)</span></span>
                   <input id="new-targets" class="input" type="text"
-                         placeholder="127.0.0.1, *.lab.test">
+                         placeholder="127.0.0.1, *.lab.test" data-i18n-placeholder="create.targetsPlaceholder">
                 </label>
               </div>
               <label class="field" for="new-goal">
-                <span class="field-label">Goal</span>
+                <span class="field-label" data-i18n="create.goalLabel">Goal</span>
                 <textarea id="new-goal" class="input textarea" rows="2" required
-                          placeholder="Prove whether the staging app exposes an auth bypass."></textarea>
+                          placeholder="Prove whether the staging app exposes an auth bypass."
+                          data-i18n-placeholder="create.goalPlaceholder"></textarea>
               </label>
               <div class="button-row">
-                <button class="btn primary" type="submit">Create</button>
+                <button class="btn primary" type="submit" data-i18n="create.submit">Create</button>
                 <label class="check" for="new-authorized">
                   <input id="new-authorized" type="checkbox" checked>
-                  <span>I am authorized to test these targets</span>
+                  <span data-i18n="create.authorizedLabel">I am authorized to test these targets</span>
                 </label>
               </div>
             </form>
@@ -212,21 +215,22 @@
     <section class="panel" id="panel-graph" role="tabpanel" aria-labelledby="tab-graph" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Exploration graph</h2>
+          <h2 class="section-title" data-i18n="graph.title">Exploration graph</h2>
           <p class="section-sub" id="graph-count">No nodes</p>
         </div>
         <div class="section-actions">
-          <div class="legend" id="graph-legend" aria-label="Node kind legend"></div>
-          <button class="btn ghost" id="graph-fit" type="button" title="Re-run layout">Re-layout</button>
+          <div class="legend" id="graph-legend" aria-label="Node kind legend" data-i18n-aria-label="graph.legendAria"></div>
+          <button class="btn ghost" id="graph-fit" type="button" title="Re-run layout"
+                  data-i18n="graph.relayout" data-i18n-title="graph.relayoutTitle">Re-layout</button>
         </div>
       </div>
       <div class="graph-layout">
         <div class="graph-canvas">
           <div class="empty-state compact" id="graph-empty">
-            <p>Start a run to populate the exploration graph.</p>
+            <p data-i18n="graph.empty">Start a run to populate the exploration graph.</p>
           </div>
           <svg id="graph-svg" class="graph-svg" viewBox="0 0 960 620" role="img"
-               aria-label="Force-directed exploration graph" hidden></svg>
+               aria-label="Force-directed exploration graph" data-i18n-aria-label="graph.svgAria" hidden></svg>
         </div>
         <aside class="graph-detail" aria-live="polite">
           <div id="graph-detail">
@@ -240,33 +244,33 @@
     <section class="panel" id="panel-findings" role="tabpanel" aria-labelledby="tab-findings" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Findings</h2>
-          <p class="section-sub"><span id="findings-count">0</span> findings, highest severity first</p>
+          <h2 class="section-title" data-i18n="findings.title">Findings</h2>
+          <p class="section-sub"><span id="findings-count">0</span><span data-i18n="findings.subSuffix"> findings, highest severity first</span></p>
         </div>
         <label class="field inline" for="finding-filter">
-          <span class="field-label">Severity</span>
+          <span class="field-label" data-i18n="findings.severityFilter">Severity</span>
           <select id="finding-filter" class="select">
-            <option value="">All</option>
-            <option value="critical">Critical</option>
-            <option value="high">High</option>
-            <option value="medium">Medium</option>
-            <option value="low">Low</option>
-            <option value="info">Info</option>
+            <option value="" data-i18n="common.all">All</option>
+            <option value="critical" data-i18n="severity.critical">Critical</option>
+            <option value="high" data-i18n="severity.high">High</option>
+            <option value="medium" data-i18n="severity.medium">Medium</option>
+            <option value="low" data-i18n="severity.low">Low</option>
+            <option value="info" data-i18n="severity.info">Info</option>
           </select>
         </label>
       </div>
       <div class="split">
         <div class="table-wrap">
           <table class="data-table" id="findings-table">
-            <caption class="sr-only">Findings by severity</caption>
+            <caption class="sr-only" data-i18n="findings.caption">Findings by severity</caption>
             <thead>
-              <tr><th scope="col">Severity</th><th scope="col">Title</th><th scope="col">Confidence</th>
-                  <th scope="col">Status</th><th scope="col">Created</th></tr>
+              <tr><th scope="col" data-i18n="findings.colSeverity">Severity</th><th scope="col" data-i18n="findings.colTitle">Title</th><th scope="col" data-i18n="findings.colConfidence">Confidence</th>
+                  <th scope="col" data-i18n="findings.colStatus">Status</th><th scope="col" data-i18n="findings.colCreated">Created</th></tr>
             </thead>
             <tbody id="findings-body"></tbody>
           </table>
           <div class="empty-state compact" id="findings-empty" hidden>
-            <p>No findings recorded yet.</p>
+            <p data-i18n="findings.empty">No findings recorded yet.</p>
           </div>
         </div>
         <aside class="detail-pane" id="finding-detail" aria-live="polite">
@@ -279,42 +283,42 @@
     <section class="panel" id="panel-assets" role="tabpanel" aria-labelledby="tab-assets" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Shared asset graph</h2>
-          <p class="section-sub"><span id="assets-count">0</span> assets discovered</p>
+          <h2 class="section-title" data-i18n="assets.title">Shared asset graph</h2>
+          <p class="section-sub"><span id="assets-count">0</span><span data-i18n="assets.subSuffix"> assets discovered</span></p>
         </div>
         <div class="section-actions">
           <label class="field inline" for="asset-search">
-            <span class="field-label">Search</span>
-            <input id="asset-search" class="input" type="search" placeholder="Filter value…">
+            <span class="field-label" data-i18n="assets.searchLabel">Search</span>
+            <input id="asset-search" class="input" type="search" placeholder="Filter value…" data-i18n-placeholder="assets.searchPlaceholder">
           </label>
           <label class="field inline" for="asset-filter">
-            <span class="field-label">Kind</span>
+            <span class="field-label" data-i18n="assets.kindLabel">Kind</span>
             <select id="asset-filter" class="select">
-              <option value="">All</option>
-              <option value="root_domain">Root domain</option>
-              <option value="subdomain">Subdomain</option>
-              <option value="host">Host</option>
-              <option value="ip">IP</option>
-              <option value="service">Service</option>
-              <option value="endpoint">Endpoint</option>
-              <option value="app">App</option>
-              <option value="credential">Credential</option>
-              <option value="artifact">Artifact</option>
+              <option value="" data-i18n="common.all">All</option>
+              <option value="root_domain" data-i18n="assetKind.root_domain">Root domain</option>
+              <option value="subdomain" data-i18n="assetKind.subdomain">Subdomain</option>
+              <option value="host" data-i18n="assetKind.host">Host</option>
+              <option value="ip" data-i18n="assetKind.ip">IP</option>
+              <option value="service" data-i18n="assetKind.service">Service</option>
+              <option value="endpoint" data-i18n="assetKind.endpoint">Endpoint</option>
+              <option value="app" data-i18n="assetKind.app">App</option>
+              <option value="credential" data-i18n="assetKind.credential">Credential</option>
+              <option value="artifact" data-i18n="assetKind.artifact">Artifact</option>
             </select>
           </label>
         </div>
       </div>
       <div class="table-wrap">
         <table class="data-table" id="assets-table">
-          <caption class="sr-only">Discovered assets</caption>
+          <caption class="sr-only" data-i18n="assets.caption">Discovered assets</caption>
           <thead>
-            <tr><th scope="col">Kind</th><th scope="col">Value</th><th scope="col">First seen</th>
-                <th scope="col">Last seen</th></tr>
+            <tr><th scope="col" data-i18n="assets.colKind">Kind</th><th scope="col" data-i18n="assets.colValue">Value</th><th scope="col" data-i18n="assets.colFirstSeen">First seen</th>
+                <th scope="col" data-i18n="assets.colLastSeen">Last seen</th></tr>
           </thead>
           <tbody id="assets-body"></tbody>
         </table>
         <div class="empty-state compact" id="assets-empty" hidden>
-          <p>No assets discovered yet.</p>
+          <p data-i18n="assets.empty">No assets discovered yet.</p>
         </div>
       </div>
     </section>
@@ -323,31 +327,31 @@
     <section class="panel" id="panel-timeline" role="tabpanel" aria-labelledby="tab-timeline" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Live timeline</h2>
-          <p class="section-sub"><span id="timeline-count">0</span> events ·
+          <h2 class="section-title" data-i18n="timeline.title">Live timeline</h2>
+          <p class="section-sub"><span id="timeline-count">0</span><span data-i18n="timeline.eventsSuffix"> events</span> ·
             <span id="sse-status">stream offline</span></p>
         </div>
         <div class="section-actions wrap">
           <label class="field inline" for="timeline-filter">
-            <span class="field-label">Filter</span>
-            <input id="timeline-filter" class="input" type="search" placeholder="type, message, task…">
+            <span class="field-label" data-i18n="timeline.filterLabel">Filter</span>
+            <input id="timeline-filter" class="input" type="search" placeholder="type, message, task…" data-i18n-placeholder="timeline.filterPlaceholder">
           </label>
           <label class="field inline" for="timeline-type">
-            <span class="field-label">Type</span>
+            <span class="field-label" data-i18n="timeline.typeLabel">Type</span>
             <select id="timeline-type" class="select">
-              <option value="">All types</option>
+              <option value="" data-i18n="timeline.allTypes">All types</option>
             </select>
           </label>
           <label class="check" for="timeline-autoscroll">
-            <input id="timeline-autoscroll" type="checkbox" checked> Auto-scroll
+            <input id="timeline-autoscroll" type="checkbox" checked> <span data-i18n="timeline.autoscroll">Auto-scroll</span>
           </label>
           <button id="timeline-pause" class="btn ghost" type="button" aria-pressed="false">Pause</button>
-          <button id="timeline-clear" class="btn ghost" type="button">Clear</button>
+          <button id="timeline-clear" class="btn ghost" type="button" data-i18n="timeline.clear">Clear</button>
         </div>
       </div>
       <ol class="timeline" id="timeline-log" aria-live="polite" aria-relevant="additions"></ol>
       <div class="empty-state compact" id="timeline-empty">
-        <p>No events yet. The stream connects automatically when a project is selected.</p>
+        <p data-i18n="timeline.empty">No events yet. The stream connects automatically when a project is selected.</p>
       </div>
     </section>
 
@@ -355,13 +359,13 @@
     <section class="panel" id="panel-todos" role="tabpanel" aria-labelledby="tab-todos" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Todo chain</h2>
-          <p class="section-sub"><span id="todos-count">0</span> items in the shared plan</p>
+          <h2 class="section-title" data-i18n="todos.title">Todo chain</h2>
+          <p class="section-sub"><span id="todos-count">0</span><span data-i18n="todos.subSuffix"> items in the shared plan</span></p>
         </div>
       </div>
       <ul class="todo-list" id="todos-list"></ul>
       <div class="empty-state compact" id="todos-empty">
-        <p>The planner has not published a todo chain yet.</p>
+        <p data-i18n="todos.empty">The planner has not published a todo chain yet.</p>
       </div>
     </section>
 
@@ -369,22 +373,22 @@
     <section class="panel" id="panel-report" role="tabpanel" aria-labelledby="tab-report" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Engagement report</h2>
+          <h2 class="section-title" data-i18n="report.title">Engagement report</h2>
           <p class="section-sub" id="report-meta">Latest generated report</p>
         </div>
         <div class="section-actions">
-          <button class="btn ghost" id="btn-report-reload" type="button">Reload</button>
+          <button class="btn ghost" id="btn-report-reload" type="button" data-i18n="report.reload">Reload</button>
           <a class="btn ghost" id="report-open" href="#" target="_blank" rel="noopener noreferrer"
-             aria-disabled="true">Open in new tab</a>
-          <a class="btn ghost" id="report-markdown" href="#" aria-disabled="true">Raw markdown</a>
+             aria-disabled="true" data-i18n="report.openNewTab">Open in new tab</a>
+          <a class="btn ghost" id="report-markdown" href="#" aria-disabled="true" data-i18n="report.rawMarkdown">Raw markdown</a>
         </div>
       </div>
       <div class="report-frame-wrap">
         <div class="empty-state compact" id="report-empty">
-          <p>No report yet. It is generated when a run completes.</p>
+          <p data-i18n="report.empty">No report yet. It is generated when a run completes.</p>
         </div>
         <iframe id="report-frame" class="report-frame" title="ARIA-X engagement report"
-                sandbox="allow-same-origin" hidden></iframe>
+                data-i18n-title="report.frameTitle" sandbox="allow-same-origin" hidden></iframe>
       </div>
     </section>
 
@@ -392,47 +396,56 @@
     <section class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" tabindex="0" hidden>
       <div class="section-head">
         <div>
-          <h2 class="section-title">Settings</h2>
-          <p class="section-sub">Public configuration, scope and console preferences</p>
+          <h2 class="section-title" data-i18n="settings.title">Settings</h2>
+          <p class="section-sub" data-i18n="settings.subtitle">Public configuration, scope and console preferences</p>
         </div>
-        <button class="btn ghost" id="settings-refresh" type="button">Reload config</button>
+        <button class="btn ghost" id="settings-refresh" type="button" data-i18n="settings.reloadConfig">Reload config</button>
       </div>
       <div class="grid two">
         <section class="card">
-          <div class="card-head"><h2 class="card-title">Scope</h2></div>
+          <div class="card-head"><h2 class="card-title" data-i18n="settings.scopeTitle">Scope</h2></div>
           <dl class="kv" id="settings-scope"><dt>—</dt><dd>—</dd></dl>
         </section>
         <section class="card">
-          <div class="card-head"><h2 class="card-title">Console access</h2></div>
-          <p class="muted">If the server was started with an auth token, paste it here. It is stored
+          <div class="card-head"><h2 class="card-title" data-i18n="settings.consoleAccessTitle">Console access</h2></div>
+          <p class="muted" data-i18n="settings.tokenHelp">If the server was started with an auth token, paste it here. It is stored
             only in this browser's localStorage and sent as a Bearer token.</p>
           <label class="field" for="token-input">
-            <span class="field-label">Bearer token</span>
+            <span class="field-label" data-i18n="settings.tokenLabel">Bearer token</span>
             <input id="token-input" class="input" type="password" autocomplete="off"
-                   placeholder="paste token…">
+                   placeholder="paste token…" data-i18n-placeholder="settings.tokenPlaceholder">
           </label>
           <div class="button-row">
-            <button class="btn" id="btn-token-save" type="button">Save token</button>
-            <button class="btn ghost" id="btn-token-clear" type="button">Clear</button>
+            <button class="btn" id="btn-token-save" type="button" data-i18n="settings.saveToken">Save token</button>
+            <button class="btn ghost" id="btn-token-clear" type="button" data-i18n="settings.clearToken">Clear</button>
           </div>
           <label class="field" for="poll-interval">
-            <span class="field-label">Refresh interval</span>
+            <span class="field-label" data-i18n="settings.pollLabel">Refresh interval</span>
             <select id="poll-interval" class="select">
-              <option value="2000">2 seconds</option>
-              <option value="3000" selected>3 seconds</option>
-              <option value="5000">5 seconds</option>
-              <option value="10000">10 seconds</option>
+              <option value="2000" data-i18n="settings.poll2s">2 seconds</option>
+              <option value="3000" selected data-i18n="settings.poll3s">3 seconds</option>
+              <option value="5000" data-i18n="settings.poll5s">5 seconds</option>
+              <option value="10000" data-i18n="settings.poll10s">10 seconds</option>
             </select>
           </label>
+          <label class="field" for="language-select">
+            <span class="field-label" data-i18n="settings.languageLabel">Console language</span>
+            <select id="language-select" class="select">
+              <option value="en" lang="en">English</option>
+              <option value="zh-CN" lang="zh-CN">简体中文</option>
+              <option value="ja" lang="ja">日本語</option>
+            </select>
+          </label>
+          <p class="hint-text" data-i18n="settings.languageNote">Changes console labels only; report bodies keep their original language.</p>
         </section>
       </div>
       <div class="grid two">
         <section class="card">
-          <div class="card-head"><h2 class="card-title">Public config</h2></div>
+          <div class="card-head"><h2 class="card-title" data-i18n="settings.publicConfigTitle">Public config</h2></div>
           <pre class="code-block" id="settings-config">Loading…</pre>
         </section>
         <section class="card">
-          <div class="card-head"><h2 class="card-title">Tool catalog</h2></div>
+          <div class="card-head"><h2 class="card-title" data-i18n="settings.toolCatalogTitle">Tool catalog</h2></div>
           <div id="settings-tools" class="tool-list"><p class="muted">Loading…</p></div>
           <p class="muted small" id="settings-version">ARIA-X</p>
         </section>
@@ -441,6 +454,7 @@
   </main>
 
   <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
+  <script src="/static/i18n.js" defer></script>
   <script src="/static/app.js" defer></script>
 </body>
 </html>

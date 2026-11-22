@@ -35,7 +35,7 @@
   --radius-sm: 7px;
   --shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans", "Yu Gothic UI", "Noto Sans CJK SC", "Noto Sans JP", "Microsoft YaHei", sans-serif;
   --topbar-h: 66px;
 }
 

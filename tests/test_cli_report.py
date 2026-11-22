@@ -6,6 +6,7 @@ import argparse
 import io
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -74,16 +75,16 @@ class CliReportResolutionTests(unittest.TestCase):
             self.assertEqual(Path(buf_exact.getvalue().strip()).resolve(), old_rep.resolve())
 
     def test_web_load_report_binds_preview_and_download_to_same_run(self) -> None:
-        node = "/opt/homebrew/bin/node"
+        node = shutil.which("node") or "/opt/homebrew/bin/node"
         if not Path(node).exists():
             self.skipTest("node not installed")
-        app_js = (ROOT / "src" / "aria_x" / "web" / "app.js").read_text(encoding="utf-8")
         # Extract and exercise loadReport() against mocked fetchRaw where newer run has MD-only
         # and older run has HTML+MD; assert both preview and markdown download belong to newer run.
         script = r"""
 const fs = require("fs");
 const assert = require("assert");
-const code = fs.readFileSync(process.argv[1], "utf8");
+const i18nCode = fs.readFileSync(process.argv[1], "utf8");
+const code = fs.readFileSync(process.argv[2], "utf8");
 const elements = {};
 function makeEl(id) {
   return {
@@ -100,6 +101,8 @@ for (const id of ["report-empty", "report-frame", "report-meta", "report-open", 
 }
 const ctx = {
   document: {
+    documentElement: { lang: "en" },
+    title: "",
     getElementById: (id) => elements[id] || makeEl(id),
     querySelectorAll: () => [],
     addEventListener: () => {},
@@ -135,6 +138,8 @@ const ctx = {
 // Instrument app.js to expose loadReport and state in a controlled vm
 const vm = require("vm");
 Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+ctx.window.ARIA_X_I18N = undefined;
+vm.runInNewContext(i18nCode, ctx);
 const patched = code.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, loadReport };\n})();");
 vm.runInNewContext(patched, ctx);
 ctx.__TEST__.state.projectId = "p1";
@@ -157,7 +162,10 @@ ctx.__TEST__.loadReport().then(() => {
   console.log("WEB_REPORT_CONSISTENCY_OK");
 }).catch((err) => { console.error(err); process.exit(1); });
 """
-        proc = subprocess.run([node, "-e", script, str(ROOT / "src" / "aria_x" / "web" / "app.js")],
-                              capture_output=True, text=True, timeout=15)
+        proc = subprocess.run([
+            node, "-e", script,
+            str(ROOT / "src" / "aria_x" / "web" / "i18n.js"),
+            str(ROOT / "src" / "aria_x" / "web" / "app.js"),
+        ], capture_output=True, text=True, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("WEB_REPORT_CONSISTENCY_OK", proc.stdout)

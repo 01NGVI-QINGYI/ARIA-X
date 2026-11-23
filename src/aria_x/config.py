@@ -22,7 +22,7 @@ import os
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from .errors import ConfigError
 from .util import as_list, json_loads, normalize_base_url, parse_bool
@@ -255,14 +255,84 @@ class AriaXConfig:
             raise ConfigError("refusing to start: scope.targets is empty")
 
     def public_dict(self) -> dict[str, Any]:
-        data = self.to_dict()
-        key = data.get("llm", {}).get("api_key") or ""
-        if key:
-            data["llm"]["api_key"] = key[:4] + "…" + key[-2:] if len(key) > 8 else "***"
-        token = data.get("server", {}).get("auth_token") or ""
-        if token:
-            data["server"]["auth_token"] = "***"
-        return data
+        """Return an explicit allowlist of non-sensitive configuration fields."""
+        return {
+            "name": str(self.name),
+            "data_dir": str(self.data_dir),
+            "runs_dir": str(self.runs_dir),
+            "log_level": str(self.log_level),
+            "llm": {
+                "provider": str(self.llm.provider),
+                "base_url": sanitize_url_for_display(self.llm.base_url),
+                "api_key": "***" if self.llm.api_key else "",
+                "model": str(self.llm.model),
+                "temperature": self.llm.temperature,
+                "max_tokens": self.llm.max_tokens,
+                "timeout": self.llm.timeout,
+                "max_retries": self.llm.max_retries,
+                "tool_mode": str(self.llm.tool_mode),
+                "json_mode": bool(self.llm.json_mode),
+                "role_models": dict(self.llm.role_models),
+            },
+            "budget": {
+                "max_seconds": self.budget.max_seconds,
+                "max_llm_calls": self.budget.max_llm_calls,
+                "max_tokens": self.budget.max_tokens,
+                "max_tool_calls": self.budget.max_tool_calls,
+                "max_steps_per_task": self.budget.max_steps_per_task,
+                "max_intents_per_reason": self.budget.max_intents_per_reason,
+                "max_concurrency": self.budget.max_concurrency,
+                "max_total_intents": self.budget.max_total_intents,
+                "max_specialist_depth": self.budget.max_specialist_depth,
+            },
+            "sandbox": {
+                "backend": str(self.sandbox.backend),
+                "image": str(self.sandbox.image),
+                "workdir": str(self.sandbox.workdir),
+                "timeout": self.sandbox.timeout,
+                "network": str(self.sandbox.network),
+                "docker_binary": str(self.sandbox.docker_binary),
+                "max_output": self.sandbox.max_output,
+            },
+            "scope": {
+                "authorized": bool(self.scope.authorized),
+                "targets": [sanitize_url_for_display(t) for t in self.scope.targets],
+                "deny": [sanitize_url_for_display(d) for d in self.scope.deny],
+                "allow_private": bool(self.scope.allow_private),
+                "allow_loopback": bool(self.scope.allow_loopback),
+                "max_rps": self.scope.max_rps,
+                "ports": list(self.scope.ports),
+                "max_ports": self.scope.max_ports,
+            },
+            "safety": {
+                "approval": str(self.safety.approval),
+                "block_destructive": bool(self.safety.block_destructive),
+                "extra_blocked_patterns": list(self.safety.extra_blocked_patterns),
+                "redact_secrets": bool(self.safety.redact_secrets),
+                "allow_public_targets": bool(self.safety.allow_public_targets),
+                "max_command_seconds": self.safety.max_command_seconds,
+            },
+            "server": {
+                "host": str(self.server.host),
+                "port": self.server.port,
+                "auth_token": "***" if self.server.auth_token else "",
+                "open_browser": bool(self.server.open_browser),
+                "cors_origin": str(self.server.cors_origin),
+            },
+            "engine": {
+                "bootstrap": bool(self.engine.bootstrap),
+                "reason_on_change": bool(self.engine.reason_on_change),
+                "max_idle_rounds": self.engine.max_idle_rounds,
+                "retry_failed_tasks": self.engine.retry_failed_tasks,
+                "require_finding_for_completion": bool(self.engine.require_finding_for_completion),
+                "language": str(self.engine.language),
+                "planner_role": str(self.engine.planner_role),
+                "worker_role": str(self.engine.worker_role),
+                "specialist_role": str(self.engine.specialist_role),
+                "skills_dir": str(self.engine.skills_dir),
+                "prompts_dir": str(self.engine.prompts_dir),
+            },
+        }
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -283,6 +353,32 @@ class AriaXConfig:
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
+
+def sanitize_url_for_display(raw: str) -> str:
+    """Strip userinfo, query parameters, and fragments from URL-like strings."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if "://" in text:
+        try:
+            parts = urlsplit(text)
+            port = parts.port
+        except ValueError:
+            return ""
+        if not parts.scheme or not parts.hostname:
+            return ""
+        host = parts.hostname
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        netloc = f"{host}:{port}" if port is not None else host
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    if any(ch in text for ch in ("@", "?", "#")):
+        cleaned = text.split("#", 1)[0].split("?", 1)[0]
+        if "@" in cleaned:
+            cleaned = cleaned.rsplit("@", 1)[1]
+        return cleaned.strip()
+    return text
+
 
 _SECTION_TYPES = {
     "llm": LLMConfig, "budget": BudgetConfig, "sandbox": SandboxConfig,

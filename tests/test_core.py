@@ -114,6 +114,78 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             cfg.validate()
 
+    def test_public_dict_allowlist_masks_secrets_and_preserves_live_config(self) -> None:
+        import json
+
+        cfg = AriaXConfig()
+        cfg.llm.provider = "openai"
+        cfg.llm.api_key = "sk-synth-abcd1234567890-xy99"
+        cfg.llm.base_url = "https://synthuser:synthpass@gateway.example.test:8443/v1?api_key=synthq&sig=42#frag"
+        cfg.llm.extra_headers = {
+            "Authorization": "Bearer synth-hdr-secret",
+            "X-Custom-Opaque": "synth-custom-hdr",
+        }
+        cfg.llm.extra_body = {
+            "custom_cred": "synth-body-secret",
+            "nested": {"opaque_tok": "synth-nested-secret"},
+        }
+        cfg.llm.scenario = "synth-scenario-secret"
+        cfg.sandbox.env = {
+            "AWS_SECRET_ACCESS_KEY": "synth-aws",
+            "MY_OPAQUE_ENV": "synth-opaque-env",
+        }
+        cfg.sandbox.extra_args = ["-e", "DOCKER_OPAQUE=synth-arg-secret"]
+        cfg.server.auth_token = "synth-auth-token-9999"
+        cfg.scope.targets = ["127.0.0.1", "https://suser:spass@lab.example.test:8443/api?tok=stoken"]
+        cfg.scope.deny = ["https://duser:dpass@deny.example.test/path?x=secret"]
+        cfg.scope.notes = "synth-note-secret"
+        cfg.safety.note = "synth-safety-note"
+
+        pub = cfg.public_dict()
+        dumped = json.dumps(pub)
+
+        self.assertEqual(pub["llm"]["api_key"], "***")
+        self.assertEqual(pub["server"]["auth_token"], "***")
+        self.assertEqual(pub["llm"]["base_url"], "https://gateway.example.test:8443/v1")
+        self.assertEqual(pub["scope"]["targets"], ["127.0.0.1", "https://lab.example.test:8443/api"])
+        self.assertEqual(pub["scope"]["deny"], ["https://deny.example.test/path"])
+
+        for excluded in ("extra_headers", "extra_body", "scenario"):
+            self.assertNotIn(excluded, pub["llm"])
+        for excluded in ("env", "extra_args"):
+            self.assertNotIn(excluded, pub["sandbox"])
+        self.assertNotIn("notes", pub["scope"])
+        self.assertNotIn("note", pub["safety"])
+
+        for forbidden in (
+            "sk-synth-abcd1234567890-xy99", "sk-s", "xy99",
+            "synthuser", "synthpass", "synthq", "sig=42",
+            "synth-hdr-secret", "X-Custom-Opaque", "synth-custom-hdr",
+            "custom_cred", "synth-body-secret", "opaque_tok", "synth-nested-secret",
+            "synth-scenario-secret", "AWS_SECRET_ACCESS_KEY", "synth-aws",
+            "MY_OPAQUE_ENV", "synth-opaque-env", "DOCKER_OPAQUE", "synth-arg-secret",
+            "synth-auth-token-9999", "suser", "spass", "stoken",
+            "duser", "dpass", "synth-note-secret", "synth-safety-note",
+        ):
+            self.assertNotIn(forbidden, dumped)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            saved_path = cfg.save(Path(tmp) / "saved.json")
+            saved_text = saved_path.read_text(encoding="utf-8")
+            self.assertNotIn("sk-synth-abcd1234567890-xy99", saved_text)
+            self.assertNotIn("synth-auth-token-9999", saved_text)
+            self.assertNotIn("synth-custom-hdr", saved_text)
+            self.assertNotIn("synth-opaque-env", saved_text)
+
+        # Mutating returned dict must not affect live config
+        pub["llm"]["api_key"] = "mutated"
+        pub["scope"]["targets"].append("evil.test")
+        self.assertEqual(cfg.llm.api_key, "sk-synth-abcd1234567890-xy99")
+        self.assertEqual(cfg.llm.extra_headers["X-Custom-Opaque"], "synth-custom-hdr")
+        self.assertEqual(cfg.llm.extra_body["nested"]["opaque_tok"], "synth-nested-secret")
+        self.assertEqual(cfg.sandbox.env["MY_OPAQUE_ENV"], "synth-opaque-env")
+        self.assertEqual(cfg.server.auth_token, "synth-auth-token-9999")
+
 
 class ScopeTests(unittest.TestCase):
     def _scope(self, **kwargs) -> Scope:

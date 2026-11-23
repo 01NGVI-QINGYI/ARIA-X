@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 from urllib.parse import unquote
 
 from .. import TAGLINE, __version__
-from ..config import AriaXConfig
+from ..config import AriaXConfig, sanitize_url_for_display
 from ..errors import AriaXError, ConfigError, NotFound
 from ..events import APPROVAL_DECIDED, HINT, EventBus
 from ..models import Message, Node, Project, Run
@@ -291,16 +291,19 @@ class Api:
     def scope_summary(self) -> dict[str, Any]:
         try:  # pragma: no cover - scope layer is small but optional for tests
             from ..tools.scope import Scope
-            return Scope(
+            summary = Scope(
                 self.config.scope,
                 allow_public_targets=bool(self.config.safety.allow_public_targets),
             ).summary()
+            summary["targets"] = [sanitize_url_for_display(t) for t in summary.get("targets", [])]
+            summary["deny"] = [sanitize_url_for_display(d) for d in summary.get("deny", [])]
+            return summary
         except Exception:
             cfg = self.config.scope
             return {
                 "authorized": cfg.authorized,
-                "targets": list(cfg.targets),
-                "deny": list(cfg.deny),
+                "targets": [sanitize_url_for_display(t) for t in cfg.targets],
+                "deny": [sanitize_url_for_display(d) for d in cfg.deny],
                 "allow_private": cfg.allow_private,
                 "allow_loopback": cfg.allow_loopback,
                 "max_rps": cfg.max_rps,

@@ -181,14 +181,65 @@ class ServerTestCase(unittest.TestCase):
 
     def test_config_masks_secrets_and_lists_tools(self) -> None:
         self.config.server.auth_token = "supersecret-token"
+        self.config.llm.provider = "openai"
+        self.config.llm.model = "deepseek-chat"
+        self.config.llm.api_key = "sk-synth-abcd1234567890-xy99"
+        self.config.llm.base_url = "https://synthuser:synthpass@gateway.example.test:8443/v1?key=synthq"
+        self.config.llm.extra_headers = {
+            "Authorization": "Bearer synth-hdr-secret",
+            "X-Opaque-Header": "synth-hdr-opaque",
+        }
+        self.config.llm.extra_body = {
+            "custom_token": "synth-body-secret",
+            "nested": {"opaque_field": "synth-nested-secret"},
+        }
+        self.config.sandbox.env = {
+            "GH_TOKEN": "synth-gh-secret",
+            "CUSTOM_VAR": "synth-env-opaque",
+        }
+        self.config.sandbox.extra_args = ["-e", "ARG_SECRET=synth-arg-val"]
+        self.config.scope.targets = ["127.0.0.1", "https://u1:p1@lab.example.test/app?tok=qsecret"]
+        self.config.scope.deny = ["https://u2:p2@deny.example.test/admin?tok=dsecret"]
+
         status, body = self.json_request("GET", "/api/config", token="supersecret-token")
         self.assertEqual(status, 200)
+        dumped = json.dumps(body)
+
+        # Settings-required fields remain intact
+        self.assertIn("version", body)
+        self.assertIn("tagline", body)
         self.assertIn("tools", body)
         self.assertGreater(len(body["tools"]), 5)
+        self.assertTrue(body["auth_required"])
         self.assertIn("scope_summary", body)
-        self.assertEqual(body["scope_summary"]["targets"], ["127.0.0.1"])
+        self.assertEqual(body["scope_summary"]["targets"], ["127.0.0.1", "https://lab.example.test/app"])
+        self.assertEqual(body["llm"]["provider"], "openai")
+        self.assertEqual(body["llm"]["model"], "deepseek-chat")
+        self.assertEqual(body["llm"]["base_url"], "https://gateway.example.test:8443/v1")
+        self.assertEqual(body["llm"]["api_key"], "***")
         self.assertEqual(body["server"]["auth_token"], "***")
-        self.assertNotIn("supersecret-token", json.dumps(body))
+        self.assertIn("budget", body)
+        self.assertEqual(body["sandbox"]["backend"], "local")
+        self.assertEqual(body["safety"]["approval"], "auto")
+        self.assertIn("engine", body)
+
+        # Excluded fields and all credential values/fragments must be absent
+        for excluded in ("extra_headers", "extra_body", "scenario"):
+            self.assertNotIn(excluded, body["llm"])
+        for excluded in ("env", "extra_args"):
+            self.assertNotIn(excluded, body["sandbox"])
+
+        for forbidden in (
+            "supersecret-token",
+            "sk-synth-abcd1234567890-xy99", "sk-s", "xy99",
+            "synthuser", "synthpass", "synthq",
+            "synth-hdr-secret", "X-Opaque-Header", "synth-hdr-opaque",
+            "custom_token", "synth-body-secret", "opaque_field", "synth-nested-secret",
+            "GH_TOKEN", "synth-gh-secret", "CUSTOM_VAR", "synth-env-opaque",
+            "ARG_SECRET", "synth-arg-val",
+            "u1", "p1", "qsecret", "u2", "p2", "dsecret",
+        ):
+            self.assertNotIn(forbidden, dumped)
 
     def test_auth_required_for_api_but_not_health_or_static(self) -> None:
         self.config.server.auth_token = "secret-token"

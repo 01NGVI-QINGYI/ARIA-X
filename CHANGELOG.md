@@ -5,16 +5,24 @@ change, but persisted schema changes will include a migration note.
 
 ## [0.2.1] — 2026-11-23
 
-### Breaking Changes & Migration — SSE Authentication
+### Breaking Changes & Migration
 
-- **Removed `?token=` query-string authentication on SSE (`GET /api/projects/{id}/events`)**:
+- **SSE authentication migration (`?token=` query-string auth removed)**:
   When `server.auth_token` / `ARIA_X_AUTH_TOKEN` is configured, requests passing only
-  `?token=<token>` in the URL are now **rejected with `401 Unauthorized`** so long-lived
-  credentials never enter HTTP access logs or proxy histories.
-- **Required client migration**: External SSE consumers must authenticate via
-  `Authorization: Bearer <token>` or `X-ARIA-X-Token: <token>` request headers. The
-  built-in Web Console (`src/aria_x/web/app.js`) has been migrated from `EventSource`
-  to streaming `fetch` with `Authorization: Bearer` and `Last-Event-ID`.
+  `?token=<token>` on `GET /api/projects/{id}/events` are now **rejected with
+  `401 Unauthorized`** so long-lived credentials are no longer sent in SSE request URLs
+  (avoiding query-string token exposure in HTTP server and proxy access logs). External
+  SSE consumers must migrate to `Authorization: Bearer <token>` or
+  `X-ARIA-X-Token: <token>` request headers; the built-in Web Console
+  (`src/aria_x/web/app.js`) has been migrated from `EventSource` to streaming `fetch`
+  with `Authorization: Bearer` and `Last-Event-ID`.
+- **`AriaXConfig.save()` is now a non-reloadable redacted export (`save_private()` added)**:
+  `AriaXConfig.save()` now delegates to `AriaXConfig.export_public()` and writes a
+  shareable `_redacted_export: true` JSON snapshot that `AriaXConfig.from_dict()` and
+  `AriaXConfig.load()` reject with `ConfigError` (literal `"***"` placeholders are also
+  rejected as runtime credentials). Callers needing reloadable local persistence must
+  explicitly call `AriaXConfig.save_private("<path>.json")` (`.json` suffix required;
+  atomic write with owner-only `0o600` permissions).
 
 ### Security
 
@@ -27,26 +35,19 @@ change, but persisted schema changes will include a migration note.
   `llm.scenario`, `sandbox.env`, `sandbox.extra_args`, `scope.notes`, `safety.note`, and
   any unknown/custom attributes without mutating live config.
 - **Separated shareable redacted export from reloadable private config persistence**:
-  Added `AriaXConfig.export_public()` (writes `_redacted_export: true` JSON snapshots)
-  and kept `AriaXConfig.save()` delegating to `export_public()` so existing callers never
-  unexpectedly write plaintext secrets. `AriaXConfig.from_dict()`, `load()`, and
-  `validate()` now reject redacted exports and literal `"***"` credentials with
-  `ConfigError`. Added explicit `AriaXConfig.save_private()` for reloadable local config
-  persistence (preserving `extra_headers`, `extra_body`, `scenario`, `sandbox.env`,
-  `sandbox.extra_args`, `scope.notes`, `safety.note`, and credentials) via atomic write
-  with owner-only `0o600` permissions.
-  *Compatibility impact*: Callers that previously used `AriaXConfig.save()` expecting a
-  reloadable config must switch to `AriaXConfig.save_private()`; files written by `save()`
-  or `export_public()` are strictly shareable redacted snapshots.
+  Added `AriaXConfig.export_public()` and `AriaXConfig.save_private()` (requiring a
+  `.json` suffix before touching the target path, preserving `extra_headers`,
+  `extra_body`, `scenario`, `sandbox.env`, `sandbox.extra_args`, `scope.notes`,
+  `safety.note`, and credentials, written atomically with `0o600` permissions).
 - **HTTP access, error, and exception log sanitization**:
   Normalized logged request paths in `AriaXRequestHandler` using explicit route templates
   (e.g., `/api/projects/{project_id}/events`, `/static/{asset}`) and hashed digests for
   unknown or unparseable paths (`/<unknown:...>`, `/api/<unknown:...>`,
   `<unparseable:...>`). Restricted query-string logging to validated `replay`, `limit`,
   `format`, and `status` values while redacting `token`, `project_id`, `task_id`, and
-  unknown keys. Replaced `logger.exception(...)` and raw error formatting with safe
-  structured logs (`method`, normalized `route`, `status`, `error_type`) without raw
-  exception bodies, tracebacks, or request payloads.
+  unknown keys (`[REDACTED]`). Replaced `logger.exception(...)` and raw error formatting
+  with safe structured logs (`method`, normalized `route`, `status`, `error_type`) without
+  raw exception bodies, tracebacks, or request payloads.
 - **`local` sandbox isolation boundary notice**:
   Documented in `docs/SECURITY.md` that `sandbox.backend = "local"` runs commands with
   current OS user privileges (inheriting `HOME`, constraining only initial `cwd` and
@@ -60,13 +61,15 @@ change, but persisted schema changes will include a migration note.
   Added atomic `EventBus.subscribe_with_snapshot()` and wired `Last-Event-ID` from
   `AriaXRequestHandler` through `Api.stream_events()` so in-buffer cursors matching the
   current project stream replay all subsequent visible buffered events in order (even
-  beyond the initial `replay=150` window) before handing off seamlessly to live events
-  with zero duplicates or drops, while missing, expired, or foreign-project cursors fall
-  back to bounded `replay`. Updated `src/aria_x/web/app.js` to discard incomplete trailing
-  EOF fragments (never entering timeline, `sseLastEventId`, or `seenEventIds`), removed
-  unused `state.es`, and added bounded exponential backoff (`sseFailureCount`, capped at
-  30s) for consecutive reconnect failures while preserving `401` stop, project-switch/clear
-  abort, and display-only i18n switching.
+  beyond the initial `replay=150` window) and hand off across the replay/live boundary
+  without boundary gaps or duplicate event IDs within the bounded `EventBus` replay buffer
+  and subscriber queue capacity; missing, expired, or foreign-project cursors fall back to
+  bounded `replay`. Updated `src/aria_x/web/app.js` to discard incomplete trailing EOF
+  fragments (never entering timeline, `sseLastEventId`, or `seenEventIds`), removed unused
+  `state.es`, and counted both short-lived (`< 2s`) `200` EOFs and post-`200` read errors
+  toward bounded exponential backoff (`sseFailureCount`, capped at 30s) until a stream
+  stays stable for `>= 2s`, while preserving `401` stop, project-switch/clear abort, and
+  display-only i18n switching.
 
 ### Maintenance
 

@@ -723,8 +723,104 @@ class ServerTestCase(unittest.TestCase):
         joined = "\n".join(captured.output)
         self.assertIn("replay=10", joined)
         self.assertIn("[REDACTED]", joined)
-        for secret in ("synth-access-tok-111", "synth-custom-q-222", "synth-exc-tok-444"):
+        for secret in (
+            "synth-access-tok-111",
+            "synth-custom-q-222",
+            "synth-exc-tok-444",
+            "boom-secret-check",
+            self.project.id,
+        ):
             self.assertNotIn(secret, joined)
+        self.assertIn("/api/projects/{project_id}/events", joined)
+        self.assertIn("error_type=RuntimeError", joined)
+
+    def test_server_logs_normalize_routes_unknown_paths_and_strip_exception_bodies(self) -> None:
+        import logging
+        from unittest import mock
+        from aria_x.server.app import AriaXRequestHandler, _normalize_log_path
+
+        self.assertTrue(_normalize_log_path("http://[::1/").startswith("<unparseable:"))
+        self.assertTrue(_normalize_log_path("/api/projects/p%00bad").startswith("<unparseable:"))
+
+        with self.assertLogs("aria_x.server", level=logging.DEBUG) as captured:
+            # 1. Dynamic API path + query params
+            status, _ = self.json_request(
+                "GET",
+                f"/api/projects/{self.project.id}/graph?limit=25&secret_k=synth-q-222",
+            )
+            self.assertEqual(status, 200)
+
+            # 2. Dynamic static asset path (404)
+            status_static, _, _ = self.request("GET", "/static/synth-static-asset-333.js")
+            self.assertEqual(status_static, 404)
+
+            # 3. Unknown non-API path & unknown API path
+            status_unk_root, _, _ = self.request("GET", "/totally/unknown/synth-unknown-root-444")
+            self.assertEqual(status_unk_root, 404)
+            status_unk_api, _, _ = self.request("GET", "/api/nonexistent/synth-unknown-api-555")
+            self.assertEqual(status_unk_api, 404)
+
+            # 4. Simulated AriaXError with sensitive exception body
+            with mock.patch.object(
+                self.server.api,
+                "dispatch",
+                side_effect=NotFound("aria-secret-body-666"),
+            ):
+                status_nf, body_nf = self.json_request("GET", "/api/projects/synth-dyn-proj-111")
+                self.assertEqual(status_nf, 404)
+                self.assertEqual(body_nf["error"], "aria-x.not_found")
+
+            # 5. Simulated unhandled RuntimeError in API dispatch with sensitive body & request payload
+            with mock.patch.object(
+                self.server.api,
+                "dispatch",
+                side_effect=RuntimeError("downstream-secret-body-777"),
+            ):
+                status_err, body_err = self.json_request(
+                    "POST",
+                    "/api/projects/synth-dyn-proj-111/hints",
+                    {"content": "body-secret-888"},
+                )
+                self.assertEqual(status_err, 500)
+                self.assertEqual(body_err["error"], "internal_error")
+
+            # 6. Simulated unhandled ValueError in _handle
+            with mock.patch.object(
+                AriaXRequestHandler,
+                "_handle_api",
+                side_effect=ValueError("handle-secret-body-999"),
+            ):
+                status_h, body_h = self.json_request("GET", "/api/projects/synth-dyn-proj-111")
+                self.assertEqual(status_h, 500)
+                self.assertEqual(body_h["error"], "internal_error")
+
+        joined = "\n".join(captured.output)
+        for expected in (
+            "/api/projects/{project_id}/graph?limit=25&[REDACTED]",
+            "/static/{asset}",
+            "/<unknown:",
+            "/api/<unknown:",
+            "route=/api/projects/{project_id} status=404 code=aria-x.not_found error_type=NotFound",
+            "method=POST route=/api/projects/{project_id}/hints status=500 error_type=RuntimeError",
+            "unhandled server error method=GET route=/api/projects/{project_id} status=500 error_type=ValueError",
+        ):
+            self.assertIn(expected, joined)
+
+        for forbidden in (
+            self.project.id,
+            "synth-dyn-proj-111",
+            "synth-q-222",
+            "secret_k",
+            "synth-static-asset-333",
+            "synth-unknown-root-444",
+            "synth-unknown-api-555",
+            "aria-secret-body-666",
+            "downstream-secret-body-777",
+            "body-secret-888",
+            "handle-secret-body-999",
+            "Traceback",
+        ):
+            self.assertNotIn(forbidden, joined)
 
     def test_web_fetch_sse_auth_replay_heartbeat_reconnect_and_switch(self) -> None:
         import shutil

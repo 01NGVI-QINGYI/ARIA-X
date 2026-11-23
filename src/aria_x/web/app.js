@@ -74,7 +74,6 @@
     timelineFilter: "",
     timelineType: "",
     sseConnected: false,
-    es: null,
     sseSeq: 0,
     sseAbort: null,
     sseReconnectTimer: null,
@@ -1415,10 +1414,6 @@
       try { state.sseAbort.abort(); } catch { /* ignore */ }
       state.sseAbort = null;
     }
-    if (state.es) {
-      try { state.es.close(); } catch { /* ignore */ }
-      state.es = null;
-    }
     setSseStatus(false);
   }
 
@@ -1459,7 +1454,7 @@
     onSseEvent({
       type: eventType,
       data: dataLines.join("\n"),
-      lastEventId: eventId !== null ? eventId : state.sseLastEventId,
+      lastEventId: eventId !== null ? eventId : "",
     });
   }
 
@@ -1495,7 +1490,9 @@
         if (!body || typeof body.getReader !== "function") {
           const text = typeof response.text === "function" ? await response.text() : "";
           if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
-          for (const frame of String(text || "").split(/\r?\n\r?\n/)) {
+          const parts = String(text || "").split(/\r?\n\r?\n/);
+          parts.pop(); // discard any trailing unterminated fragment
+          for (const frame of parts) {
             if (frame) dispatchSseFrame(frame, streamSeq, projectId);
           }
           setSseStatus(false);
@@ -1523,8 +1520,15 @@
             }
           }
         }
-        if (decoder) buffer += decoder.decode();
-        if (buffer) dispatchSseFrame(buffer, streamSeq, projectId);
+        if (decoder) {
+          buffer += decoder.decode();
+          const tailParts = buffer.split(/\r?\n\r?\n/);
+          buffer = tailParts.pop() || "";
+          for (const frame of tailParts) {
+            if (frame) dispatchSseFrame(frame, streamSeq, projectId);
+          }
+        }
+        // Any remaining unterminated fragment in `buffer` at EOF is intentionally discarded.
         if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
         setSseStatus(false);
         scheduleSseReconnect(streamSeq, projectId);

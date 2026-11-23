@@ -525,6 +525,177 @@ class ServerTestCase(unittest.TestCase):
             response2.close()
             conn2.close()
 
+    def test_sse_last_event_id_resumes_all_buffered_events_and_isolates_projects(self) -> None:
+        other_project = self.engagement.create_project("Other project", "isolate events")
+        big_bus = EventBus(replay=250)
+        big_eng = FakeEngagement(self.store, big_bus)
+        big_srv = create_server(self.config, big_eng, big_bus, self.store)
+        big_srv.api.heartbeat_seconds = 0.2
+        big_thread = threading.Thread(
+            target=big_srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True,
+        )
+        big_thread.start()
+        host, port = big_srv.server_address[:2]
+        try:
+            proj_a_events = []
+            for idx in range(185):
+                proj_a_events.append(big_bus.emit(
+                    "log", project_id=self.project.id,
+                    data={"seq": idx, "project": "A"},
+                ))
+                if idx % 5 == 0:
+                    big_bus.emit(
+                        "log", project_id=other_project.id,
+                        data={"seq": idx, "project": "B"},
+                    )
+            cursor = proj_a_events[9].id  # 175 buffered projA events follow (> 150)
+
+            conn = http.client.HTTPConnection(host, port, timeout=8)
+            conn.request(
+                "GET",
+                f"/api/projects/{self.project.id}/events?replay=150",
+                headers={"Last-Event-ID": cursor},
+            )
+            response = conn.getresponse()
+            try:
+                self.assertEqual(response.status, 200)
+                live_ev = big_bus.emit(
+                    "log", project_id=self.project.id,
+                    data={"seq": 999, "project": "A"},
+                )
+                received_seqs: list[int] = []
+                received_ids: list[str] = []
+                deadline = time.monotonic() + 6.0
+                cur_id = ""
+                cur_data = ""
+                while time.monotonic() < deadline:
+                    raw = response.fp.readline()
+                    if not raw:
+                        break
+                    line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                    if line.startswith("id: "):
+                        cur_id = line[4:].strip()
+                    elif line.startswith("data: "):
+                        cur_data = line[6:].strip()
+                    elif line == "":
+                        if cur_data:
+                            payload = json.loads(cur_data)
+                            self.assertNotEqual(payload.get("project"), "B")
+                            received_ids.append(cur_id)
+                            received_seqs.append(payload["seq"])
+                            cur_id = ""
+                            cur_data = ""
+                            if received_seqs[-1] == 999:
+                                break
+                expected_seqs = list(range(10, 185)) + [999]
+                self.assertEqual(received_seqs, expected_seqs)
+                self.assertEqual(len(received_ids), len(set(received_ids)))
+                self.assertEqual(received_ids[-1], live_ev.id)
+                self.assertNotIn(cursor, received_ids)
+            finally:
+                response.close()
+                conn.close()
+        finally:
+            big_srv.shutdown()
+            big_srv.server_close()
+            big_thread.join(timeout=5)
+            big_bus.close()
+
+    def test_sse_last_event_id_expired_foreign_and_concurrent_handoff(self) -> None:
+        other_project = self.engagement.create_project("Project B", "isolate cursor")
+        # 1. Expired cursor falls back to bounded replay
+        small_bus = EventBus(replay=8)
+        small_eng = FakeEngagement(self.store, small_bus)
+        small_srv = create_server(self.config, small_eng, small_bus, self.store)
+        small_srv.api.heartbeat_seconds = 0.2
+        small_thread = threading.Thread(
+            target=small_srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True,
+        )
+        small_thread.start()
+        host, port = small_srv.server_address[:2]
+        try:
+            ev0 = small_bus.emit("log", project_id=self.project.id, data={"seq": 0})
+            for i in range(1, 15):
+                small_bus.emit("log", project_id=self.project.id, data={"seq": i})
+            foreign_ev = small_bus.emit("log", project_id=other_project.id, data={"seq": 777})
+
+            def _read_seqs(path: str, headers: dict[str, str], stop_count: int) -> list[int]:
+                conn = http.client.HTTPConnection(host, port, timeout=6)
+                conn.request("GET", path, headers=headers)
+                resp = conn.getresponse()
+                seqs: list[int] = []
+                try:
+                    deadline = time.monotonic() + 5.0
+                    while time.monotonic() < deadline and len(seqs) < stop_count:
+                        raw = resp.fp.readline()
+                        if not raw:
+                            break
+                        line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                        if line.startswith("data: "):
+                            payload = json.loads(line[6:].strip())
+                            seqs.append(payload["seq"])
+                finally:
+                    resp.close()
+                    conn.close()
+                return seqs
+
+            # Expired cursor -> bounded replay=3
+            self.assertEqual(
+                _read_seqs(
+                    f"/api/projects/{self.project.id}/events?replay=3",
+                    {"Last-Event-ID": ev0.id},
+                    3,
+                ),
+                [12, 13, 14],
+            )
+            # Foreign project cursor -> treated as non-matching, bounded replay=3 for project A
+            self.assertEqual(
+                _read_seqs(
+                    f"/api/projects/{self.project.id}/events?replay=3",
+                    {"Last-Event-ID": foreign_ev.id},
+                    3,
+                ),
+                [12, 13, 14],
+            )
+        finally:
+            small_srv.shutdown()
+            small_srv.server_close()
+            small_thread.join(timeout=5)
+            small_bus.close()
+
+        # 2. Concurrent emission across replay->live handoff has zero drops and zero duplicates
+        pre_cursor = self.bus.emit("log", project_id=self.project.id, data={"seq": 0})
+        emit_done = threading.Event()
+
+        def _emitter() -> None:
+            for i in range(1, 31):
+                self.bus.emit("log", project_id=self.project.id, data={"seq": i})
+                time.sleep(0.002)
+            emit_done.set()
+
+        t = threading.Thread(target=_emitter, daemon=True)
+        t.start()
+        conn, response = self.open_stream(
+            f"/api/projects/{self.project.id}/events?replay=5",
+            headers={"Last-Event-ID": pre_cursor.id},
+        )
+        try:
+            seqs: list[int] = []
+            deadline = time.monotonic() + 6.0
+            while time.monotonic() < deadline and len(seqs) < 30:
+                raw = response.fp.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", "replace").rstrip("\r\n")
+                if line.startswith("data: "):
+                    seqs.append(json.loads(line[6:].strip())["seq"])
+            self.assertTrue(emit_done.wait(timeout=3.0))
+            self.assertEqual(seqs, list(range(1, 31)))
+        finally:
+            response.close()
+            conn.close()
+            t.join(timeout=3.0)
+
     def test_server_logs_redact_sensitive_query_params(self) -> None:
         import logging
         from unittest import mock
@@ -674,6 +845,7 @@ async function flush() {
 
 (async () => {
   const { state, connectSSE, disconnectSSE, selectProject, setLanguage } = ctx.__TEST__;
+  assert.strictEqual("es" in state, false, "unused state.es must be removed");
   state.token = "synth-web-token";
   state.projectId = "projA";
 
@@ -794,6 +966,193 @@ async function flush() {
         ], capture_output=True, text=True, timeout=15)
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("WEB_FETCH_SSE_OK", proc.stdout)
+
+    def test_web_sse_eof_partial_frame_and_real_text_decoder(self) -> None:
+        import shutil
+        import subprocess
+
+        node = shutil.which("node") or "/opt/homebrew/bin/node"
+        if not Path(node).exists():
+            self.skipTest("node not installed")
+
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+const i18nCode = fs.readFileSync(process.argv[1], "utf8");
+const appCode = fs.readFileSync(process.argv[2], "utf8");
+
+const elements = {};
+function makeEl(id) {
+  return {
+    id, hidden: false, disabled: false, value: "", textContent: "",
+    className: "", children: [], style: {}, scrollTop: 0, scrollHeight: 100,
+    checked: true, dataset: {},
+    classList: {
+      _set: new Set(),
+      add(...xs) { xs.forEach(x => this._set.add(x)); },
+      remove(...xs) { xs.forEach(x => this._set.delete(x)); },
+      toggle(x, f) { if (f === undefined) { if (this._set.has(x)) this._set.delete(x); else this._set.add(x); } else if (f) this._set.add(x); else this._set.delete(x); },
+    },
+    setAttribute(k, v) { this[k] = v; },
+    removeAttribute(k) { delete this[k]; },
+    addEventListener() {},
+    querySelector() { return null; },
+    appendChild(c) { this.children.push(c); return c; },
+    replaceChildren(...cs) { this.children = cs; },
+  };
+}
+for (const id of [
+  "conn-pill", "conn-text", "sse-status", "timeline-pulse", "timeline-log",
+  "timeline-empty", "timeline-count", "timeline-autoscroll", "timeline-type",
+  "project-select", "overview-empty", "overview-content", "project-name",
+  "project-goal", "run-id", "run-state", "run-chip", "btn-start", "btn-stop",
+  "approval-list", "approval-count", "report-empty", "report-frame",
+  "report-meta", "report-open", "report-markdown", "graph-svg", "graph-empty",
+  "graph-count", "graph-detail", "graph-legend", "toasts",
+]) {
+  elements[id] = makeEl(id);
+}
+
+const timers = new Map();
+let nextTimerId = 1;
+const clearedTimers = [];
+
+function makeByteReader(chunks) {
+  let idx = 0;
+  return {
+    async read() {
+      if (idx >= chunks.length) return { done: true, value: undefined };
+      return { done: false, value: chunks[idx++] };
+    },
+    async cancel() {},
+  };
+}
+
+let streamBehavior = null;
+
+class FakeAbortController {
+  constructor() { this.signal = { aborted: false }; }
+  abort() { this.signal.aborted = true; }
+}
+
+const ctx = {
+  AbortController: FakeAbortController,
+  TextDecoder: globalThis.TextDecoder,
+  Uint8Array: globalThis.Uint8Array,
+  document: {
+    documentElement: { lang: "en" },
+    title: "",
+    hidden: false,
+    getElementById: (id) => elements[id] || makeEl(id),
+    querySelectorAll: () => [],
+    createElement: (tag) => makeEl(tag),
+    createElementNS: (_ns, tag) => makeEl(tag),
+    addEventListener: () => {},
+  },
+  window: {
+    location: { hash: "#timeline" },
+    addEventListener: () => {},
+    setTimeout: (fn, ms) => { const id = nextTimerId++; timers.set(id, { fn, ms }); return id; },
+    clearTimeout: (id) => { if (id) { clearedTimers.push(id); timers.delete(id); } },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    history: { replaceState: () => {} },
+    scrollTo: () => {},
+  },
+  localStorage: { getItem: () => "", setItem: () => {}, removeItem: () => {} },
+  URL: { createObjectURL: () => "blob:0", revokeObjectURL() {} },
+  Blob: class {},
+  fetch: async (url, init) => streamBehavior(url, init || {}),
+  setTimeout,
+  clearTimeout,
+};
+Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+ctx.window.ARIA_X_I18N = undefined;
+vm.runInNewContext(i18nCode, ctx);
+const patched = appCode.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, connectSSE, disconnectSSE, selectProject };\n})();");
+vm.runInNewContext(patched, ctx);
+
+async function flush() {
+  for (let i = 0; i < 6; i += 1) await new Promise(r => setTimeout(r, 2));
+}
+
+(async () => {
+  const { state, connectSSE, disconnectSSE, selectProject } = ctx.__TEST__;
+  state.token = "synth-tok";
+  state.projectId = "projUTF8";
+
+  // 1. Split multi-byte UTF-8 ("中文测试🔐日本語") mid-codepoint across Uint8Array chunks
+  //    AND end attempt 1 with an incomplete EOF frame (no trailing blank line)
+  const enc = new TextEncoder();
+  const completeBytes = enc.encode("id: ev_utf8\nevent: log\ndata: {\"message\": \"中文测试🔐日本語\"}\n\n");
+  const cutIndex1 = completeBytes.indexOf(0xe4) + 1; // inside 3-byte '中'
+  const cutIndex2 = completeBytes.indexOf(0xf0) + 2; // inside 4-byte '🔐'
+  const part1 = completeBytes.slice(0, cutIndex1);
+  const part2 = completeBytes.slice(cutIndex1, cutIndex2);
+  const part3 = completeBytes.slice(cutIndex2);
+  const partialEof = enc.encode("id: ev_cut\nevent: log\ndata: {\"message\": \"half-frame");
+
+  let attempt = 0;
+  streamBehavior = async (_url, init) => {
+    attempt += 1;
+    if (attempt === 1) {
+      return {
+        ok: true,
+        status: 200,
+        body: { getReader: () => makeByteReader([part1, part2, part3, partialEof]) },
+      };
+    }
+    assert.strictEqual(init.headers["Last-Event-ID"], "ev_utf8", "cursor must NOT advance to partial EOF frame");
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => makeByteReader([
+          enc.encode("id: ev_cut\nevent: log\ndata: {\"message\": \"full-frame\"}\n\n"),
+        ]),
+      },
+    };
+  };
+
+  connectSSE();
+  await flush();
+  assert.strictEqual(state.events.length, 1, "incomplete EOF frame must NOT enter timeline");
+  assert.strictEqual(state.events[0].data.message, "中文测试🔐日本語");
+  assert.strictEqual(state.events[0].data.message.includes("\uFFFD"), false, "real TextDecoder must preserve split UTF-8");
+  assert.strictEqual(state.sseLastEventId, "ev_utf8");
+  assert.strictEqual(state.seenEventIds.has("ev_cut"), false, "incomplete EOF frame must NOT enter seenEventIds");
+
+  // Reconnect delivers the complete ev_cut frame -> must now be accepted
+  const tid = state.sseReconnectTimer;
+  const tinfo = timers.get(tid);
+  assert(tinfo);
+  timers.delete(tid);
+  tinfo.fn();
+  await flush();
+  assert.strictEqual(state.events.length, 2);
+  assert.strictEqual(state.events[1].id, "ev_cut");
+  assert.strictEqual(state.events[1].data.message, "full-frame");
+  assert.strictEqual(state.sseLastEventId, "ev_cut");
+
+  // Clearing project aborts stream and cancels pending reconnect timer
+  assert(state.sseReconnectTimer !== null);
+  const pendingTid = state.sseReconnectTimer;
+  await selectProject("");
+  assert(clearedTimers.includes(pendingTid), "clearing project must cancel reconnect timer");
+  assert.strictEqual(state.sseConnected, false);
+
+  disconnectSSE();
+  console.log("WEB_SSE_EOF_UTF8_OK");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+        proc = subprocess.run([
+            node, "-e", script,
+            str(Path(__file__).resolve().parents[1] / "src" / "aria_x" / "web" / "i18n.js"),
+            str(Path(__file__).resolve().parents[1] / "src" / "aria_x" / "web" / "app.js"),
+        ], capture_output=True, text=True, timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("WEB_SSE_EOF_UTF8_OK", proc.stdout)
 
     # -- static console ----------------------------------------------------
 

@@ -233,8 +233,14 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
             except RequestError as exc:
                 self._respond(response_for_error(exc))
                 return
+        req_headers: dict[str, str] = {}
+        last_event_id = self.headers.get("Last-Event-ID", "")
+        if last_event_id:
+            req_headers["Last-Event-ID"] = last_event_id
         try:
-            result = self.server.api.dispatch(method, path, query, body)  # type: ignore[attr-defined]
+            result = self.server.api.dispatch(  # type: ignore[attr-defined]
+                method, path, query, body, headers=req_headers,
+            )
         except RequestError as exc:
             self._respond(response_for_error(exc), extra_headers=exc.headers)
             return
@@ -258,7 +264,7 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
         for key, value in self._common_headers().items():
             self.send_header(key, value)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-ARIA-X-Token")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID, X-ARIA-X-Token")
         self.send_header("Access-Control-Max-Age", "600")
         self.send_header("Content-Length", "0")
         self.end_headers()

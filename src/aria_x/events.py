@@ -143,6 +143,19 @@ class EventBus:
                 break
         return Subscription(self, q)
 
+    def subscribe_with_snapshot(self, maxsize: int = 500) -> tuple["Subscription", list[Event]]:
+        """Atomically register a fresh live queue and snapshot ``_recent``.
+
+        Any event emitted after the snapshot is guaranteed to be delivered into
+        the queue in emission order, with zero gap between replay and live tail.
+        """
+        q: queue.Queue[Event] = queue.Queue(maxsize=maxsize)
+        with self._lock:
+            if not self._closed:
+                self._subscribers.append(q)
+            snapshot = list(self._recent)
+        return Subscription(self, q), snapshot
+
     def unsubscribe(self, q: queue.Queue[Event]) -> None:
         with self._lock:
             if q in self._subscribers:
@@ -168,17 +181,16 @@ class EventBus:
             self._recent.append(event)
             if len(self._recent) > self._replay:
                 self._recent = self._recent[-self._replay:]
-            subscribers = list(self._subscribers)
-        for q in subscribers:
-            try:
-                q.put_nowait(event)
-            except queue.Full:
-                # Slow consumer: drop the oldest item to keep the stream live.
+            for q in self._subscribers:
                 try:
-                    q.get_nowait()
                     q.put_nowait(event)
-                except (queue.Empty, queue.Full):
-                    pass
+                except queue.Full:
+                    # Slow consumer: drop the oldest item to keep the stream live.
+                    try:
+                        q.get_nowait()
+                        q.put_nowait(event)
+                    except (queue.Empty, queue.Full):
+                        pass
         self._append_log(event)
         if self._echo:
             print(f"[{event.ts}] {event.type} {json_dumps(event.data, ensure_ascii=False)}")

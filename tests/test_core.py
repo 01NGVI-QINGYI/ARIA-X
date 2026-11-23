@@ -351,6 +351,20 @@ class EventTests(unittest.TestCase):
         self.assertIn("event: run.started", event.sse())
         sub.close()
 
+    def test_subscribe_with_snapshot_has_no_gap_or_duplicate(self) -> None:
+        bus = EventBus(replay=10)
+        first = bus.emit("log", project_id="p1", data={"seq": 1})
+        sub, snap = bus.subscribe_with_snapshot()
+        try:
+            self.assertEqual([e.id for e in snap], [first.id])
+            second = bus.emit("log", project_id="p1", data={"seq": 2})
+            third = bus.emit("log", project_id="p1", data={"seq": 3})
+            self.assertEqual(sub.get(timeout=1).id, second.id)
+            self.assertEqual(sub.get(timeout=1).id, third.id)
+            self.assertEqual(sub.drain(), [])
+        finally:
+            sub.close()
+
 
 class LLMTests(unittest.TestCase):
     def test_json_extraction(self) -> None:

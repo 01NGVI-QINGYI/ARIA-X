@@ -245,6 +245,18 @@ class ServerTestCase(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, dumped)
 
+        # Live config on server must remain unmutated
+        self.assertEqual(self.config.server.auth_token, "supersecret-token")
+        self.assertEqual(self.config.llm.api_key, "sk-synth-abcd1234567890-xy99")
+        self.assertEqual(
+            self.config.llm.base_url,
+            "https://synthuser:synthpass@gateway.example.test:8443/v1?key=synthq",
+        )
+        self.assertEqual(self.config.llm.extra_headers["X-Opaque-Header"], "synth-hdr-opaque")
+        self.assertEqual(self.config.llm.extra_body["nested"]["opaque_field"], "synth-nested-secret")
+        self.assertEqual(self.config.sandbox.env["GH_TOKEN"], "synth-gh-secret")
+        self.assertEqual(self.config.sandbox.extra_args, ["-e", "ARG_SECRET=synth-arg-val"])
+
     def test_auth_required_for_api_but_not_health_or_static(self) -> None:
         self.config.server.auth_token = "secret-token"
         status, _, data = self.request("GET", "/api/projects")

@@ -18,7 +18,10 @@ A minimal engagement config looks like::
 
 from __future__ import annotations
 
+import copy
+import json
 import os
+import secrets
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -31,6 +34,9 @@ try:  # Python 3.11+
     import tomllib as _toml
 except ModuleNotFoundError:  # pragma: no cover - only on older interpreters
     _toml = None
+
+_REDACTED_SENTINEL = "***"
+_REDACTED_EXPORT_KEY = "_redacted_export"
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +184,13 @@ class AriaXConfig:
     def from_dict(cls, raw: Mapping[str, Any]) -> "AriaXConfig":
         if not raw:
             return cls()
+        if raw.get(_REDACTED_EXPORT_KEY) is True or (
+            _REDACTED_EXPORT_KEY in raw and parse_bool(raw.get(_REDACTED_EXPORT_KEY))
+        ):
+            raise ConfigError(
+                "refusing to load redacted public config export; "
+                "use a real config file or save_private()"
+            )
         cfg = cls()
         for key, value in raw.items():
             if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine"}:
@@ -219,6 +232,10 @@ class AriaXConfig:
             self.safety.approval = env["ARIA_X_APPROVAL"]
 
     def validate(self) -> None:
+        if str(self.llm.api_key or "").strip() == _REDACTED_SENTINEL:
+            raise ConfigError("llm.api_key cannot be the redacted placeholder '***'")
+        if str(self.server.auth_token or "").strip() == _REDACTED_SENTINEL:
+            raise ConfigError("server.auth_token cannot be the redacted placeholder '***'")
         if self.llm.provider not in {"mock", "scenario", "openai", "anthropic", "ollama"}:
             raise ConfigError(f"unsupported llm.provider '{self.llm.provider}'")
         if self.llm.provider in {"openai", "anthropic"} and not self.llm.resolved_base_url():
@@ -337,12 +354,58 @@ class AriaXConfig:
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
-    def save(self, path: str | Path) -> Path:
-        """Write the config back as JSON (TOML writer is intentionally omitted)."""
+    def export_public(self, path: str | Path) -> Path:
+        """Write a shareable, redacted public snapshot (explicitly non-loadable)."""
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        import json
-        p.write_text(json.dumps(self.public_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        payload = {
+            _REDACTED_EXPORT_KEY: True,
+            "_export_kind": "public_redacted",
+            **self.public_dict(),
+        }
+        p.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        return p
+
+    def save(self, path: str | Path) -> Path:
+        """Write a shareable redacted export (never plaintext secrets).
+
+        Configs written by ``save()`` are marked as redacted exports and are
+        rejected by ``AriaXConfig.load()``. Call ``save_private()`` explicitly
+        to persist a reloadable local configuration with owner-only ``0o600``
+        permissions.
+        """
+        return self.export_public(path)
+
+    def save_private(self, path: str | Path) -> Path:
+        """Persist a reloadable local configuration with owner-only ``0o600`` permissions."""
+        if str(self.llm.api_key or "").strip() == _REDACTED_SENTINEL:
+            raise ConfigError("refusing to save redacted placeholder '***' as llm.api_key")
+        if str(self.server.auth_token or "").strip() == _REDACTED_SENTINEL:
+            raise ConfigError("refusing to save redacted placeholder '***' as server.auth_token")
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n"
+        tmp_path = p.parent / f".{p.name}.{secrets.token_hex(8)}.tmp"
+        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            if hasattr(os, "fchmod"):
+                os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fd = -1
+                fh.write(payload)
+                fh.flush()
+            os.replace(tmp_path, p)
+        except BaseException:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
         return p
 
     @property
@@ -403,9 +466,9 @@ def _coerce(value: Any, template: Any) -> Any:
     if isinstance(template, list):
         if isinstance(value, str):
             return [x.strip() for x in value.split(",") if x.strip()]
-        return list(value) if isinstance(value, (list, tuple)) else template
+        return copy.deepcopy(list(value)) if isinstance(value, (list, tuple)) else copy.deepcopy(template)
     if isinstance(template, dict):
-        return dict(value) if isinstance(value, Mapping) else template
+        return copy.deepcopy(dict(value)) if isinstance(value, Mapping) else copy.deepcopy(template)
     return value
 
 

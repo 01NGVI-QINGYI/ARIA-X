@@ -3,27 +3,50 @@
 All notable changes to ARIA-X are documented here. ARIA-X is pre-1.0; interfaces may
 change, but persisted schema changes will include a migration note.
 
-## [Unreleased]
+## [0.2.1] — 2026-11-23
+
+### Breaking Changes & Migration — SSE Authentication
+
+- **Removed `?token=` query-string authentication on SSE (`GET /api/projects/{id}/events`)**:
+  When `server.auth_token` / `ARIA_X_AUTH_TOKEN` is configured, requests passing only
+  `?token=<token>` in the URL are now **rejected with `401 Unauthorized`** so long-lived
+  credentials never enter HTTP access logs or proxy histories.
+- **Required client migration**: External SSE consumers must authenticate via
+  `Authorization: Bearer <token>` or `X-ARIA-X-Token: <token>` request headers. The
+  built-in Web Console (`src/aria_x/web/app.js`) has been migrated from `EventSource`
+  to streaming `fetch` with `Authorization: Bearer` and `Last-Event-ID`.
 
 ### Security
 
 - **Explicit `/api/config` public allowlist & full credential masking**:
-  `AriaXConfig.public_dict()` now constructs an explicit allowlist of non-sensitive fields
+  `AriaXConfig.public_dict()` constructs an explicit allowlist of non-sensitive fields
   instead of cloning `to_dict()`, masks non-empty `llm.api_key` and `server.auth_token`
   uniformly as `"***"` (removing partial prefix/suffix key fragments), strips userinfo,
   query parameters, and fragments from `llm.base_url`, `scope.targets`, and `scope.deny`
   (including `scope_summary`), and excludes `llm.extra_headers`, `llm.extra_body`,
   `llm.scenario`, `sandbox.env`, `sandbox.extra_args`, `scope.notes`, `safety.note`, and
   any unknown/custom attributes without mutating live config.
-- **Header-only SSE authentication & query-param log redaction**:
-  Removed `?token=` query-string authentication from `GET /api/projects/{id}/events`
-  (requests with only `?token=` now return `401`); SSE clients must authenticate via
-  `Authorization: Bearer <token>` or `X-ARIA-X-Token`. Updated the Web Console SSE
-  client in `src/aria_x/web/app.js` from `EventSource` to streaming `fetch` with
-  `Authorization: Bearer`, preserving replay, heartbeats, deduplication, `retry:` /
-  `Last-Event-ID` reconnect, project-switch abort, and display-only i18n switching.
-  Sanitized HTTP access, error, and unhandled exception logs so non-allowlisted query
-  parameter values are redacted before logging.
+- **Separated shareable redacted export from reloadable private config persistence**:
+  Added `AriaXConfig.export_public()` (writes `_redacted_export: true` JSON snapshots)
+  and kept `AriaXConfig.save()` delegating to `export_public()` so existing callers never
+  unexpectedly write plaintext secrets. `AriaXConfig.from_dict()`, `load()`, and
+  `validate()` now reject redacted exports and literal `"***"` credentials with
+  `ConfigError`. Added explicit `AriaXConfig.save_private()` for reloadable local config
+  persistence (preserving `extra_headers`, `extra_body`, `scenario`, `sandbox.env`,
+  `sandbox.extra_args`, `scope.notes`, `safety.note`, and credentials) via atomic write
+  with owner-only `0o600` permissions.
+  *Compatibility impact*: Callers that previously used `AriaXConfig.save()` expecting a
+  reloadable config must switch to `AriaXConfig.save_private()`; files written by `save()`
+  or `export_public()` are strictly shareable redacted snapshots.
+- **HTTP access, error, and exception log sanitization**:
+  Normalized logged request paths in `AriaXRequestHandler` using explicit route templates
+  (e.g., `/api/projects/{project_id}/events`, `/static/{asset}`) and hashed digests for
+  unknown or unparseable paths (`/<unknown:...>`, `/api/<unknown:...>`,
+  `<unparseable:...>`). Restricted query-string logging to validated `replay`, `limit`,
+  `format`, and `status` values while redacting `token`, `project_id`, `task_id`, and
+  unknown keys. Replaced `logger.exception(...)` and raw error formatting with safe
+  structured logs (`method`, normalized `route`, `status`, `error_type`) without raw
+  exception bodies, tracebacks, or request payloads.
 - **`local` sandbox isolation boundary notice**:
   Documented in `docs/SECURITY.md` that `sandbox.backend = "local"` runs commands with
   current OS user privileges (inheriting `HOME`, constraining only initial `cwd` and
@@ -31,13 +54,29 @@ change, but persisted schema changes will include a migration note.
   notice to `aria-x doctor` (human output and JSON `warning` field) without altering
   exit codes.
 
+### Fixed
+
+- **SSE `Last-Event-ID` cursor resume & complete-frame-only client parsing**:
+  Added atomic `EventBus.subscribe_with_snapshot()` and wired `Last-Event-ID` from
+  `AriaXRequestHandler` through `Api.stream_events()` so in-buffer cursors matching the
+  current project stream replay all subsequent visible buffered events in order (even
+  beyond the initial `replay=150` window) before handing off seamlessly to live events
+  with zero duplicates or drops, while missing, expired, or foreign-project cursors fall
+  back to bounded `replay`. Updated `src/aria_x/web/app.js` to discard incomplete trailing
+  EOF fragments (never entering timeline, `sseLastEventId`, or `seenEventIds`), removed
+  unused `state.es`, and added bounded exponential backoff (`sseFailureCount`, capped at
+  30s) for consecutive reconnect failures while preserving `401` stop, project-switch/clear
+  abort, and display-only i18n switching.
+
 ### Maintenance
 
+- **Version `0.2.1` metadata & dynamic HTTP `User-Agent`**:
+  Bumped package, CLI, Docker tags, CITATION, and documentation references to `0.2.1`;
+  derived `aria_x.tools.net.USER_AGENT` from `__version__` instead of hardcoded
+  `"ARIA-X/0.1"`.
 - **Pinned Docker base image digest**: Pinned `docker/Dockerfile` `FROM` to the verified
   official multi-arch OCI index digest for `python:3.12-slim` (`python:3.12.16-slim`,
   `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b`).
-- **Dynamic HTTP `User-Agent`**: Derived `aria_x.tools.net.USER_AGENT` from
-  `__version__` instead of hardcoded `"ARIA-X/0.1"`.
 
 ## [0.2.0] — 2026-11-22
 

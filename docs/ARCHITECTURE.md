@@ -135,7 +135,8 @@ SQLite 表（`src/aria_x/store/schema.py`）：
 - 并行运行时会并发消费同一队列，**需要确定性时把 `max_concurrency` 设为 1**。
 
 真实 provider 的密钥只从配置或环境变量读取；`AriaXConfig.public_dict()` 使用显式公开字段白名单，遮蔽 API key 与
-server token 并剥离自定义请求头、沙箱环境变量与 URL 凭据；所有事件与报告在写出前经过 `util.redact`。
+server token 并剥离自定义请求头、沙箱环境变量与 URL 凭据（`save()` / `export_public()` 仅写出不可加载的脱敏快照，
+可重新加载的本地持久化须显式调用 `save_private()` 并以 `0o600` 权限写入）；所有事件与报告在写出前经过 `util.redact`。
 
 ## 5. 工具执行边界
 

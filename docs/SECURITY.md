@@ -103,7 +103,7 @@ CLI 的 `aria-x run` 与 `Engagement.run/start_background` 都走同一检查。
 | 模型"自作主张"扩张范围 | planner 独占意图、scope 在工具层强制、工具集按角色收敛 |
 | 破坏性命令 | `CommandPolicy` 黑名单（`rm -rf /`、`mkfs`、`dd of=/dev/*`、fork bomb、关机、`curl|bash`、`history -c` 等）；高风险工具另受审批门控制 |
 | 文件系统越界 | `file_*` 工具严格限制在 engagement workdir（拒绝穿越与符号链接逃逸）；终端仅限制启动 `cwd`，`local` 后端不提供 OS 级文件系统隔离（强隔离需用 `docker`） |
-| 密钥泄漏到日志/报告 | 事件/轨迹/报告写出前 `util.redact`；`public_dict()` 使用显式公开字段白名单并全量遮罩密钥；SSE 仅用请求头认证，敏感查询参数在服务端日志中脱敏 |
+| 密钥泄漏到日志/报告 | 事件/轨迹/报告写出前 `util.redact`；`public_dict()` 使用显式公开字段白名单并全量遮罩密钥；`save()`/`export_public()` 仅导出不可加载的脱敏快照，真实本地保存需显式 `save_private()`（`0o600`）；SSE 仅用请求头认证，HTTP 日志按路由模板归一化并剥离敏感查询参数与原始异常正文 |
 | Web 控制台被远程滥用 | 默认只绑定 `127.0.0.1`；可选 Bearer token；建议反向代理 + TLS |
 | 预算失控/无限循环 | 时间、LLM 调用、token、工具调用、intent 总数、并发、专家深度全部受限 |
 | 进程残留 | `Engagement.close()` 先取消、再 join（10s 上限）；demo target 处理 SIGTERM |

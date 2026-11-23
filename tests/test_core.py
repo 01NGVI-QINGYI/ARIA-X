@@ -290,6 +290,33 @@ class ConfigTests(unittest.TestCase):
                 with self.assertRaises(ConfigError):
                     bad_cfg2.save_private(root / "bad2.json")
 
+    def test_save_private_requires_json_suffix_and_preserves_existing_file(self) -> None:
+        from unittest import mock
+
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("ARIA_X_")}
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cfg = AriaXConfig(name="Suffix Test")
+                toml_path = root / "aria-x.toml"
+                original = "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n# keep-me\n"
+                toml_path.write_text(original, encoding="utf-8")
+
+                with self.assertRaises(ConfigError):
+                    cfg.save_private(toml_path)
+                self.assertEqual(toml_path.read_text(encoding="utf-8"), original)
+                self.assertEqual(list(root.glob(".*tmp")), [])
+
+                for bad_name in ("aria-x.cfg", "aria-x"):
+                    bad_path = root / bad_name
+                    with self.assertRaises(ConfigError):
+                        cfg.save_private(bad_path)
+                    self.assertFalse(bad_path.exists())
+
+                upper_json = cfg.save_private(root / "private.JSON")
+                reloaded = AriaXConfig.load(upper_json)
+                self.assertEqual(reloaded.name, "Suffix Test")
+
 
 class ScopeTests(unittest.TestCase):
     def _scope(self, **kwargs) -> Scope:

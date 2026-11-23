@@ -377,12 +377,16 @@ class AriaXConfig:
         return self.export_public(path)
 
     def save_private(self, path: str | Path) -> Path:
-        """Persist a reloadable local configuration with owner-only ``0o600`` permissions."""
+        """Persist a reloadable JSON configuration with owner-only ``0o600`` permissions."""
         if str(self.llm.api_key or "").strip() == _REDACTED_SENTINEL:
             raise ConfigError("refusing to save redacted placeholder '***' as llm.api_key")
         if str(self.server.auth_token or "").strip() == _REDACTED_SENTINEL:
             raise ConfigError("refusing to save redacted placeholder '***' as server.auth_token")
         p = Path(path)
+        if p.suffix.lower() != ".json":
+            raise ConfigError(
+                f"save_private() writes JSON and requires a '.json' path (got '{p.name}')"
+            )
         p.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n"
         tmp_path = p.parent / f".{p.name}.{secrets.token_hex(8)}.tmp"

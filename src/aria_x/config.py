@@ -355,8 +355,12 @@ class AriaXConfig:
         return asdict(self)
 
     def export_public(self, path: str | Path) -> Path:
-        """Write a shareable, redacted public snapshot (explicitly non-loadable)."""
+        """Write a shareable, redacted JSON snapshot (explicitly non-loadable, requires ``.json``)."""
         p = Path(path)
+        if p.suffix.lower() != ".json":
+            raise ConfigError(
+                f"export_public() writes JSON and requires a '.json' path (got '{p.name}')"
+            )
         p.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             _REDACTED_EXPORT_KEY: True,
@@ -367,11 +371,11 @@ class AriaXConfig:
         return p
 
     def save(self, path: str | Path) -> Path:
-        """Write a shareable redacted export (never plaintext secrets).
+        """Write a shareable redacted JSON export (never plaintext secrets, requires ``.json``).
 
         Configs written by ``save()`` are marked as redacted exports and are
         rejected by ``AriaXConfig.load()``. Call ``save_private()`` explicitly
-        to persist a reloadable local configuration with owner-only ``0o600``
+        to persist a reloadable local JSON configuration with owner-only ``0o600``
         permissions.
         """
         return self.export_public(path)

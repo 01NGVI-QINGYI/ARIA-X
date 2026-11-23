@@ -317,6 +317,37 @@ class ConfigTests(unittest.TestCase):
                 reloaded = AriaXConfig.load(upper_json)
                 self.assertEqual(reloaded.name, "Suffix Test")
 
+    def test_export_public_and_save_require_json_suffix_and_preserve_target(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = AriaXConfig(name="Export Suffix Test")
+            toml_path = root / "aria-x.toml"
+            original = "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n# keep-me\n"
+            toml_path.write_text(original, encoding="utf-8")
+
+            for fn in (cfg.export_public, cfg.save):
+                with self.assertRaises(ConfigError):
+                    fn(toml_path)
+                self.assertEqual(toml_path.read_text(encoding="utf-8"), original)
+
+                deep_toml = root / "deep" / "nested" / "aria-x.toml"
+                with self.assertRaises(ConfigError):
+                    fn(deep_toml)
+                self.assertFalse((root / "deep").exists())
+
+                for bad_name in ("aria-x.cfg", "aria-x"):
+                    bad_path = root / bad_name
+                    with self.assertRaises(ConfigError):
+                        fn(bad_path)
+                    self.assertFalse(bad_path.exists())
+
+            pub_path = cfg.export_public(root / "pub.JSON")
+            self.assertTrue(json.loads(pub_path.read_text(encoding="utf-8")).get("_redacted_export"))
+            save_path = cfg.save(root / "saved.JSON")
+            self.assertTrue(json.loads(save_path.read_text(encoding="utf-8")).get("_redacted_export"))
+
 
 class ScopeTests(unittest.TestCase):
     def _scope(self, **kwargs) -> Scope:

@@ -355,11 +355,16 @@ class AriaXConfig:
         return asdict(self)
 
     def export_public(self, path: str | Path) -> Path:
-        """Write a shareable, redacted JSON snapshot (explicitly non-loadable, requires ``.json``)."""
+        """Write a shareable, redacted JSON snapshot to a new ``.json`` file (never overwrites)."""
         p = Path(path)
         if p.suffix.lower() != ".json":
             raise ConfigError(
                 f"export_public() writes JSON and requires a '.json' path (got '{p.name}')"
+            )
+        if p.exists() or p.is_symlink():
+            raise ConfigError(
+                f"refusing to overwrite existing file '{p}'; choose a new '.json' filename "
+                f"for export_public() (or use save_private() to update a reloadable config)"
             )
         p.parent.mkdir(parents=True, exist_ok=True)
         payload = {
@@ -367,16 +372,24 @@ class AriaXConfig:
             "_export_kind": "public_redacted",
             **self.public_dict(),
         }
-        p.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+        try:
+            with p.open("x", encoding="utf-8") as fh:
+                fh.write(text)
+        except FileExistsError:
+            raise ConfigError(
+                f"refusing to overwrite existing file '{p}'; choose a new '.json' filename "
+                f"for export_public() (or use save_private() to update a reloadable config)"
+            ) from None
         return p
 
     def save(self, path: str | Path) -> Path:
-        """Write a shareable redacted JSON export (never plaintext secrets, requires ``.json``).
+        """Write a shareable redacted JSON export to a new ``.json`` file (never overwrites).
 
         Configs written by ``save()`` are marked as redacted exports and are
         rejected by ``AriaXConfig.load()``. Call ``save_private()`` explicitly
-        to persist a reloadable local JSON configuration with owner-only ``0o600``
-        permissions.
+        to persist or update a reloadable local JSON configuration with
+        owner-only ``0o600`` permissions.
         """
         return self.export_public(path)
 

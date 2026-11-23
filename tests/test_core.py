@@ -348,6 +348,46 @@ class ConfigTests(unittest.TestCase):
             save_path = cfg.save(root / "saved.JSON")
             self.assertTrue(json.loads(save_path.read_text(encoding="utf-8")).get("_redacted_export"))
 
+    def test_export_public_and_save_refuse_to_overwrite_existing_json(self) -> None:
+        from unittest import mock
+
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("ARIA_X_")}
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cfg = AriaXConfig(
+                    name="Live Private Config",
+                    data_dir=str(root / "data"),
+                    runs_dir=str(root / "runs"),
+                )
+                cfg.llm.provider = "openai"
+                cfg.llm.api_key = "sk-synth-live-keep-1234"
+                cfg.llm.extra_headers = {"X-Keep": "hdr-val"}
+                cfg.sandbox.env = {"KEEP_ENV": "env-val"}
+                cfg.scope.notes = "keep-note"
+                cfg.server.auth_token = "synth-live-tok-5678"
+
+                private_path = cfg.save_private(root / "aria-x.json")
+                original_bytes = private_path.read_bytes()
+
+                for fn in (cfg.export_public, cfg.save):
+                    with self.assertRaises(ConfigError):
+                        fn(private_path)
+                    self.assertEqual(private_path.read_bytes(), original_bytes)
+
+                reloaded = AriaXConfig.load(private_path)
+                self.assertEqual(reloaded.llm.api_key, "sk-synth-live-keep-1234")
+                self.assertEqual(reloaded.server.auth_token, "synth-live-tok-5678")
+                self.assertEqual(reloaded.llm.extra_headers, {"X-Keep": "hdr-val"})
+                self.assertEqual(reloaded.sandbox.env, {"KEEP_ENV": "env-val"})
+                self.assertEqual(reloaded.scope.notes, "keep-note")
+
+                export_path = root / "public-snapshot.json"
+                cfg.export_public(export_path)
+                for fn in (cfg.export_public, cfg.save):
+                    with self.assertRaises(ConfigError):
+                        fn(export_path)
+
 
 class ScopeTests(unittest.TestCase):
     def _scope(self, **kwargs) -> Scope:

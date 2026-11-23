@@ -3,6 +3,42 @@
 All notable changes to ARIA-X are documented here. ARIA-X is pre-1.0; interfaces may
 change, but persisted schema changes will include a migration note.
 
+## [Unreleased]
+
+### Security
+
+- **Explicit `/api/config` public allowlist & full credential masking**:
+  `AriaXConfig.public_dict()` now constructs an explicit allowlist of non-sensitive fields
+  instead of cloning `to_dict()`, masks non-empty `llm.api_key` and `server.auth_token`
+  uniformly as `"***"` (removing partial prefix/suffix key fragments), strips userinfo,
+  query parameters, and fragments from `llm.base_url`, `scope.targets`, and `scope.deny`
+  (including `scope_summary`), and excludes `llm.extra_headers`, `llm.extra_body`,
+  `llm.scenario`, `sandbox.env`, `sandbox.extra_args`, `scope.notes`, `safety.note`, and
+  any unknown/custom attributes without mutating live config.
+- **Header-only SSE authentication & query-param log redaction**:
+  Removed `?token=` query-string authentication from `GET /api/projects/{id}/events`
+  (requests with only `?token=` now return `401`); SSE clients must authenticate via
+  `Authorization: Bearer <token>` or `X-ARIA-X-Token`. Updated the Web Console SSE
+  client in `src/aria_x/web/app.js` from `EventSource` to streaming `fetch` with
+  `Authorization: Bearer`, preserving replay, heartbeats, deduplication, `retry:` /
+  `Last-Event-ID` reconnect, project-switch abort, and display-only i18n switching.
+  Sanitized HTTP access, error, and unhandled exception logs so non-allowlisted query
+  parameter values are redacted before logging.
+- **`local` sandbox isolation boundary notice**:
+  Documented in `docs/SECURITY.md` that `sandbox.backend = "local"` runs commands with
+  current OS user privileges (inheriting `HOME`, constraining only initial `cwd` and
+  `file_*` path jail, without OS-level filesystem isolation), and added a non-fatal
+  notice to `aria-x doctor` (human output and JSON `warning` field) without altering
+  exit codes.
+
+### Maintenance
+
+- **Pinned Docker base image digest**: Pinned `docker/Dockerfile` `FROM` to the verified
+  official multi-arch OCI index digest for `python:3.12-slim` (`python:3.12.16-slim`,
+  `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b`).
+- **Dynamic HTTP `User-Agent`**: Derived `aria_x.tools.net.USER_AGENT` from
+  `__version__` instead of hardcoded `"ARIA-X/0.1"`.
+
 ## [0.2.0] — 2026-11-22
 
 ### Added

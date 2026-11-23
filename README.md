@@ -25,7 +25,7 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-253%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-259%20passing-brightgreen">
   <img alt="version" src="https://img.shields.io/badge/version-v0.2.0-orange">
 </p>
 
@@ -422,7 +422,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
 ### 测试与离线验证门
 
 ```bash
-bash scripts/verify.sh          # 运行全部 253 个单元测试 + 离线端到端 demo（无需网络与 API Key）
+bash scripts/verify.sh          # 运行全部 259 个单元测试 + 离线端到端 demo（无需网络与 API Key）
 bash scripts/dev.sh test        # 仅运行单元测试
 bash scripts/dev.sh doctor      # 运行环境自检
 ```
@@ -449,7 +449,7 @@ ARIA-X/
 │   ├── report/                # Markdown / HTML / findings.json 报告渲染器
 │   ├── server/                # ThreadingHTTPServer REST API 与 SSE 服务端
 │   └── web/                   # 零 CDN 本地控制台前端（HTML/CSS/JS）
-├── tests/                     # 253 个单元与集成测试
+├── tests/                     # 259 个单元与集成测试
 ├── examples/                  # 本机离线教学靶场、演示配置与确定性剧本
 ├── configs/                   # 配置文件模板
 └── docs/                      # 架构、融合映射、工具手册、安全模型、部署与路线图

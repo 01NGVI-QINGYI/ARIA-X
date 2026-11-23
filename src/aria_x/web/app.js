@@ -1405,6 +1405,8 @@
     $("timeline-pulse").classList.toggle("on", state.sseConnected);
   }
 
+  const SSE_STABLE_MS = 2000;
+
   function disconnectSSE({ resetBackoff = true } = {}) {
     state.sseSeq += 1;
     if (resetBackoff) state.sseFailureCount = 0;
@@ -1482,6 +1484,7 @@
     const url = `/api/projects/${encodeURIComponent(projectId)}/events?replay=150`;
 
     (async () => {
+      let connectedAt = null;
       try {
         const response = await fetch(url, init);
         if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
@@ -1495,7 +1498,7 @@
           scheduleSseReconnect(streamSeq, projectId, { isFailure: true });
           return;
         }
-        state.sseFailureCount = 0;
+        connectedAt = Date.now();
         setSseStatus(true);
         const body = response.body;
         if (!body || typeof body.getReader !== "function") {
@@ -1506,8 +1509,10 @@
           for (const frame of parts) {
             if (frame) dispatchSseFrame(frame, streamSeq, projectId);
           }
+          const isStable = (Date.now() - connectedAt) >= SSE_STABLE_MS;
+          if (isStable) state.sseFailureCount = 0;
           setSseStatus(false);
-          scheduleSseReconnect(streamSeq, projectId, { isFailure: false });
+          scheduleSseReconnect(streamSeq, projectId, { isFailure: !isStable });
           return;
         }
         const reader = body.getReader();
@@ -1541,12 +1546,17 @@
         }
         // Any remaining unterminated fragment in `buffer` at EOF is intentionally discarded.
         if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+        const isStable = (Date.now() - connectedAt) >= SSE_STABLE_MS;
+        if (isStable) state.sseFailureCount = 0;
         setSseStatus(false);
-        scheduleSseReconnect(streamSeq, projectId, { isFailure: false });
+        scheduleSseReconnect(streamSeq, projectId, { isFailure: !isStable });
       } catch (error) {
         if (controller && controller.signal && controller.signal.aborted) return;
         if (error && error.name === "AbortError") return;
         if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+        if (connectedAt !== null && (Date.now() - connectedAt) >= SSE_STABLE_MS) {
+          state.sseFailureCount = 0;
+        }
         setSseStatus(false);
         scheduleSseReconnect(streamSeq, projectId, { isFailure: true });
       }

@@ -1307,9 +1307,15 @@ class FakeAbortController {
   abort() { this.signal.aborted = true; }
 }
 
+let nowMs = 1700000000000;
+class FakeDate extends Date {
+  static now() { return nowMs; }
+}
+
 const ctx = {
   AbortController: FakeAbortController,
   TextDecoder: globalThis.TextDecoder,
+  Date: FakeDate,
   document: {
     documentElement: { lang: "en" },
     title: "",
@@ -1337,7 +1343,7 @@ const ctx = {
   setTimeout,
   clearTimeout,
 };
-Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Math, JSON, Error, Promise });
 ctx.window.ARIA_X_I18N = undefined;
 vm.runInNewContext(i18nCode, ctx);
 const patched = appCode.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, connectSSE, disconnectSSE, selectProject };\n})();");
@@ -1353,19 +1359,82 @@ async function flush() {
   state.projectId = "projBackoff";
   state.sseRetryMs = 1000;
 
-  // 1. Consecutive 503 + network errors double delay up to 30000ms cap
   let attempt = 0;
   streamBehavior = async () => {
     attempt += 1;
-    if (attempt <= 4) return { ok: false, status: 503 };
-    if (attempt <= 7) throw new Error("network down");
-    if (attempt === 8) {
+    // Attempts 1..3: immediate 200 OK EOF (< 2000ms) -> must back off!
+    if (attempt <= 3) {
       return {
         ok: true,
         status: 200,
-        body: { getReader: () => ({ async read() { return { done: true, value: undefined }; }, async cancel() {} }) },
+        body: {
+          getReader: () => ({
+            async read() { nowMs += 100; return { done: true, value: undefined }; },
+            async cancel() {},
+          }),
+        },
       };
     }
+    // Attempt 4: 200 OK then immediate reader.read() error (< 2000ms) -> must continue backing off!
+    if (attempt === 4) {
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            async read() { nowMs += 50; throw new Error("stream reset"); },
+            async cancel() {},
+          }),
+        },
+      };
+    }
+    // Attempts 5..6: 503 & network error -> hit 30000ms cap
+    if (attempt === 5) return { ok: false, status: 503 };
+    if (attempt === 6) throw new Error("network down");
+    if (attempt === 7) return { ok: false, status: 503 };
+    // Attempt 8: stable 200 OK stream (>= 2000ms) -> resets failure count to 0, EOF uses base 1000ms
+    if (attempt === 8) {
+      let step = 0;
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            async read() {
+              step += 1;
+              if (step === 1) {
+                return { done: false, value: Buffer.from("id: ok_1\nevent: log\ndata: {\"message\": \"stable\"}\n\n") };
+              }
+              nowMs += 2500;
+              return { done: true, value: undefined };
+            },
+            async cancel() {},
+          }),
+        },
+      };
+    }
+    // Attempt 9: stable 200 OK (>= 2000ms) then read error -> resets old streak and starts fresh at 1x (1000ms)
+    if (attempt === 9) {
+      let step = 0;
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            async read() {
+              step += 1;
+              if (step === 1) {
+                nowMs += 2500;
+                return { done: false, value: Buffer.from("id: ok_2\nevent: log\ndata: {\"message\": \"before err\"}\n\n") };
+              }
+              throw new Error("late drop");
+            },
+            async cancel() {},
+          }),
+        },
+      };
+    }
+    // Attempt 10: 401 cancels reconnect & resets failure count
     return { ok: false, status: 401 };
   };
 
@@ -1383,27 +1452,43 @@ async function flush() {
   }
   assert.deepStrictEqual(delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
 
-  // Attempt 8 succeeded (200 OK EOF) -> sseFailureCount reset to 0 and clean EOF uses base delay 1000
+  // Attempt 8 was stable (>= 2000ms) -> sseFailureCount reset to 0 and clean EOF uses base delay 1000
   assert.strictEqual(state.sseFailureCount, 0);
-  const cleanTid = state.sseReconnectTimer;
-  assert.strictEqual(timers.get(cleanTid).ms, 1000);
-  const cleanInfo = timers.get(cleanTid);
-  timers.delete(cleanTid);
-  cleanInfo.fn();
+  const stableTid = state.sseReconnectTimer;
+  assert.strictEqual(timers.get(stableTid).ms, 1000);
+  const stableInfo = timers.get(stableTid);
+  timers.delete(stableTid);
+  stableInfo.fn();
   await flush();
 
-  // Attempt 9 returned 401 -> stops reconnecting and resets failure count
+  // Attempt 9 was stable before throwing -> starts fresh at sseFailureCount === 1, delay === 1000
+  assert.strictEqual(state.sseFailureCount, 1);
+  const lateErrTid = state.sseReconnectTimer;
+  assert.strictEqual(timers.get(lateErrTid).ms, 1000);
+  const lateErrInfo = timers.get(lateErrTid);
+  timers.delete(lateErrTid);
+  lateErrInfo.fn();
+  await flush();
+
+  // Attempt 10 returned 401 -> stops reconnecting and resets failure count
   assert.strictEqual(state.sseReconnectTimer, null, "401 must cancel reconnect");
   assert.strictEqual(state.sseFailureCount, 0);
 
-  // 2. Switching project while backoff timer is pending cancels timer and resets failure count
+  // 2. Switching project while backoff timer is pending cancels timer and resets failure count;
+  //    then clearing project cancels active stream and keeps reconnect stopped
+  let cancelCalled = false;
   streamBehavior = async (url) => {
     if (url.includes("projBackoff")) return { ok: false, status: 502 };
     if (url.includes("projNext")) {
       return {
         ok: true,
         status: 200,
-        body: { getReader: () => ({ async read() { return { done: true, value: undefined }; }, async cancel() {} }) },
+        body: {
+          getReader: () => ({
+            read: () => new Promise(() => {}),
+            cancel() { cancelCalled = true; },
+          }),
+        },
       };
     }
     return { ok: true, status: 200, text: async () => "{}", headers: new Map() };
@@ -1416,6 +1501,11 @@ async function flush() {
   await selectProject("projNext");
   await flush();
   assert(clearedTimers.includes(pendingTid), "project switch must cancel pending backoff timer");
+  assert.strictEqual(state.sseFailureCount, 0);
+  const activeAbort = state.sseAbort;
+  await selectProject("");
+  assert.strictEqual(activeAbort.signal.aborted, true, "clearing project must abort active stream");
+  assert.strictEqual(state.sseReconnectTimer, null);
   assert.strictEqual(state.sseFailureCount, 0);
 
   disconnectSSE();

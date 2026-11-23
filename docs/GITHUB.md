@@ -51,7 +51,7 @@ Suggested first-push sequence (replace the remote URL if your username or reposi
 ```bash
 git init
 git add .
-git commit -m "ARIA-X v0.1.0"
+git commit -m "ARIA-X v0.2.1"
 git branch -M main
 git remote add origin https://github.com/01NGVI-QINGYI/ARIA-X.git
 git push -u origin main
@@ -70,7 +70,7 @@ git push -u origin main
 1. Update `CHANGELOG.md` and `CITATION.cff` if the version changes.
 2. Run `bash scripts/verify.sh` on Python 3.11 and 3.12.
 3. Confirm `README.md`, `README.en.md`, `LICENSE`, `NOTICE.md` and `THIRD_PARTY.md` are current.
-4. Create a signed tag (`v0.1.0`) and a GitHub Release from it.
+4. Create a signed tag (`v0.2.1`) and a GitHub Release from it.
 5. Attach no build artifacts unless they are reproducible; the project is pure Python and runs
    from source.
 

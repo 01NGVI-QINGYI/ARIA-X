@@ -22,7 +22,7 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 from urllib.parse import unquote
 
 from .. import TAGLINE, __version__
-from ..config import AriaXConfig
+from ..config import AriaXConfig, sanitize_url_for_display
 from ..errors import AriaXError, ConfigError, NotFound
 from ..events import APPROVAL_DECIDED, HINT, EventBus
 from ..models import Message, Node, Project, Run
@@ -125,6 +125,16 @@ class RequestError(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _header(headers: Mapping[str, str] | None, name: str) -> str:
+    if not headers:
+        return ""
+    target = name.lower()
+    for key, value in headers.items():
+        if str(key).lower() == target:
+            return str(value or "").strip()
+    return ""
+
+
 def _first(query: Mapping[str, Sequence[str]], name: str, default: str = "") -> str:
     values = query.get(name)
     if not values:
@@ -220,7 +230,8 @@ class Api:
         ]
 
     def dispatch(self, method: str, path: str, query: Mapping[str, Sequence[str]],
-                 body: Mapping[str, Any] | None = None) -> Response | StreamResponse:
+                 body: Mapping[str, Any] | None = None,
+                 *, headers: Mapping[str, str] | None = None) -> Response | StreamResponse:
         """Route one request; raises :class:`RequestError` for malformed input."""
         path = path.rstrip("/") or "/"
         allowed: list[str] = []
@@ -232,7 +243,12 @@ class Api:
                 allowed.append(route_method)
                 continue
             kwargs = {k: unquote(v) for k, v in match.groupdict().items()}
-            return handler(query=query, body=dict(body or {}), **kwargs)
+            return handler(
+                query=query,
+                body=dict(body or {}),
+                headers=dict(headers or {}),
+                **kwargs,
+            )
         if allowed:
             allowed_sorted = sorted(set(allowed) | ({"HEAD"} if "GET" in allowed else set()))
             raise RequestError(f"method {method} not allowed for {path}", status=405,
@@ -291,16 +307,19 @@ class Api:
     def scope_summary(self) -> dict[str, Any]:
         try:  # pragma: no cover - scope layer is small but optional for tests
             from ..tools.scope import Scope
-            return Scope(
+            summary = Scope(
                 self.config.scope,
                 allow_public_targets=bool(self.config.safety.allow_public_targets),
             ).summary()
+            summary["targets"] = [sanitize_url_for_display(t) for t in summary.get("targets", [])]
+            summary["deny"] = [sanitize_url_for_display(d) for d in summary.get("deny", [])]
+            return summary
         except Exception:
             cfg = self.config.scope
             return {
                 "authorized": cfg.authorized,
-                "targets": list(cfg.targets),
-                "deny": list(cfg.deny),
+                "targets": [sanitize_url_for_display(t) for t in cfg.targets],
+                "deny": [sanitize_url_for_display(d) for d in cfg.deny],
                 "allow_private": cfg.allow_private,
                 "allow_loopback": cfg.allow_loopback,
                 "max_rps": cfg.max_rps,
@@ -602,33 +621,63 @@ class Api:
     # -- SSE -------------------------------------------------------------
 
     def stream_events(self, *, project_id: str, query: Mapping[str, Sequence[str]],
+                      headers: Mapping[str, str] | None = None,
                       **_kwargs: Any) -> StreamResponse:
         self.store.get_project(project_id)  # type: ignore[union-attr]
         replay = _int_param(query, "replay", 100, 0, 500)
+        last_event_id = _header(headers, "Last-Event-ID")
         assert self.bus is not None
-        return StreamResponse(self._event_chunks(project_id, replay=replay))
+        return StreamResponse(self._event_chunks(
+            project_id, replay=replay, last_event_id=last_event_id))
 
     def _event_chunks(self, project_id: str, *, replay: int = 100,
+                      last_event_id: str = "",
                       heartbeat_seconds: float | None = None) -> Iterator[bytes]:
-        """SSE generator: replay then live events with idle heartbeats.
+        """SSE generator: cursor-aware replay then live events with idle heartbeats.
 
         Only the bus queue is touched here; the SQLite store is never accessed
         from the streaming thread after the subscription is created.
         """
         if heartbeat_seconds is None:
             heartbeat_seconds = self.heartbeat_seconds
-        subscription = self.bus.subscribe(maxsize=500)  # type: ignore[union-attr]
-        # The subscription backlog overlaps the replay buffer; ids keep the
-        # client from seeing the same event twice at stream start.
-        seen: set[str] = set()
+        sub_with_snap = getattr(self.bus, "subscribe_with_snapshot", None)
+        if callable(sub_with_snap):
+            subscription, snapshot = sub_with_snap(maxsize=500)
+        else:  # pragma: no cover - fallback for custom test doubles
+            subscription = self.bus.subscribe(maxsize=500)  # type: ignore[union-attr]
+            snapshot = self.bus.replay(max(replay, 500))  # type: ignore[union-attr]
+
+        visible = [
+            ev for ev in snapshot
+            if not getattr(ev, "project_id", "") or ev.project_id == project_id
+        ]
+        seen: dict[str, None] = {}
+
+        def _remember(event_id: str) -> None:
+            seen[event_id] = None
+            if len(seen) > 2000:
+                del seen[next(iter(seen))]
+
+        cursor = str(last_event_id or "").strip()
+        cursor_idx: int | None = None
+        if cursor:
+            for idx, ev in enumerate(visible):
+                if ev.id == cursor:
+                    cursor_idx = idx
+                    break
+
+        if cursor_idx is not None:
+            for ev in visible[:cursor_idx + 1]:
+                _remember(ev.id)
+            to_replay = visible[cursor_idx + 1:]
+        else:
+            to_replay = visible[-replay:] if replay > 0 else []
+
         try:
             yield b"retry: 3000\n: connected\n\n"
-            if replay:
-                for event in self.bus.replay(replay):  # type: ignore[union-attr]
-                    if event.project_id and event.project_id != project_id:
-                        continue
-                    seen.add(event.id)
-                    yield _sse_event(event)
+            for event in to_replay:
+                _remember(event.id)
+                yield _sse_event(event)
             import queue as _queue
             import time as _time
             heartbeat_at = _time.monotonic() + max(1.0, heartbeat_seconds)
@@ -644,9 +693,7 @@ class Api:
                     continue
                 if event.id in seen:
                     continue
-                seen.add(event.id)
-                if len(seen) > 1000:
-                    seen = set(list(seen)[-500:])
+                _remember(event.id)
                 yield _sse_event(event)
         finally:
             subscription.close()

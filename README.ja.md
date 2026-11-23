@@ -22,7 +22,7 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.0-orange">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
 </p>
 
 ---
@@ -41,7 +41,7 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
 
 詳細な出典と設計上の相違点は [NOTICE.md](NOTICE.md)、[THIRD_PARTY.md](THIRD_PARTY.md)、[docs/FUSION.md](docs/FUSION.md) を参照してください。
 
-## 主な機能（v0.2.0）
+## 主な機能（v0.2.1）
 
 - **デュアルグラフによる状態管理**：探索ノード・エッジと資産・アンカーを SQLite に保存し、事実・仮説・発見事項を追跡します。
 - **実行予算に基づく自律的な探索**：`bootstrap → reason → dispatch → explore → persist → report` の処理を、時間・モデル呼び出し・トークン・ツール呼び出しなどの予算と空転検出で制御します。
@@ -167,7 +167,7 @@ ARIA-X は、対象 Scope、承認ゲート、コマンドポリシー、監査�
 | [docs/SECURITY.md](docs/SECURITY.md) | 技術的な安全制御と制限 |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 導入と実行環境 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 実装済み機能と今後の予定 |
-| [CHANGELOG.md](CHANGELOG.md) | v0.2.0 の変更履歴（三言語対応・セキュリティ境界・パッケージ修正など） |
+| [CHANGELOG.md](CHANGELOG.md) | v0.2.1 の変更履歴（セキュリティ強化・SSE 認証移行・三言語対応など） |
 
 ## ライセンスと謝辞
 
@@ -176,5 +176,5 @@ ARIA-X は **AGPL-3.0-or-later** で公開されています。詳細は [LICENS
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.2.0 · AGPL-3.0-or-later · 01NGVI-QINGYI · ローカルの隔離環境での学習・研究向け</sub>
+  <sub>ARIA-X v0.2.1 · AGPL-3.0-or-later · 01NGVI-QINGYI · ローカルの隔離環境での学習・研究向け</sub>
 </p>

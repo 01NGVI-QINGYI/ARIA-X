@@ -30,12 +30,13 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..errors import ScopeViolation
 from ..util import json_dumps, now_iso, redact, truncate
 from .base import ToolContext, ToolRegistry, ToolResult, ToolSpec
 from .terminal import audit, clamp_float, clamp_int
 
-USER_AGENT = "ARIA-X/0.1 (authorized security research)"
+USER_AGENT = f"ARIA-X/{__version__} (authorized security research)"
 DEFAULT_HTTP_TIMEOUT = 15.0
 MAX_HTTP_BYTES = 2_000_000
 MAX_EVIDENCE_EXCERPT = 8000

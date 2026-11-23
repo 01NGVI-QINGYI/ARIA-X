@@ -1,4 +1,4 @@
-# ARIA-X — Internal Build Contracts (v0.1)
+# ARIA-X — Internal Build Contracts
 
 This file is the hand-off contract for parallel development. Read it fully before writing code.
 
@@ -171,7 +171,7 @@ All state-changing tools emit `Events` and audit. `http_request`/`port_scan`/`dn
 
 ## 5. HTTP API (server-dev)
 
-Bind `127.0.0.1` by default. Optional Bearer auth via `config.server.auth_token`.
+Bind `127.0.0.1` by default. Optional Bearer auth (`Authorization: Bearer <token>` / `X-ARIA-X-Token`, including SSE) via `config.server.auth_token`.
 Static: `GET /` → `web/index.html`, `GET /static/*`.
 
 ```
@@ -188,7 +188,7 @@ POST /api/projects/<id>/runs    {goal?} -> {run_id}  (start_background)
 GET  /api/runs/<id>             -> status + budget + tasks
 POST /api/runs/<id>/stop        -> {ok}
 POST /api/projects/<id>/hints   {content} -> {ok}    (human hint, also a chat message)
-GET  /api/projects/<id>/events  -> text/event-stream (SSE, replay recent, heartbeat)
+GET  /api/projects/<id>/events  -> text/event-stream (SSE, Last-Event-ID resume / replay, heartbeat)
 GET  /api/approvals?project_id= -> pending
 POST /api/approvals/<id>        {approved, reason?} -> {ok}
 GET  /api/report/<run_id>       -> HTML report (or 404)

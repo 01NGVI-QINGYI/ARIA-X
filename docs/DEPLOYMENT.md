@@ -184,7 +184,7 @@ python -m aria_x serve --host 127.0.0.1 --port 8787
   `ssh -L 8787:127.0.0.1:8787 user@host`；
 - 或放在带 TLS 的反向代理（Caddy/Nginx）之后，并设置 `ARIA_X_AUTH_TOKEN`；
 - ARIA-X **不自带 TLS**。直接在公网监听等于明文传输 token 与目标数据；
-- SSE 端点 `GET /api/projects/<id>/events` 支持 `?token=`（EventSource 不能设置请求头）；
+- SSE 端点 `GET /api/projects/<id>/events` 仅接受请求头认证（`Authorization: Bearer $ARIA_X_AUTH_TOKEN` 或 `X-ARIA-X-Token`），不再接受 `?token=` 查询参数；
 - health：`curl -H "Authorization: Bearer $ARIA_X_AUTH_TOKEN" http://127.0.0.1:8787/api/health`。
 
 ## 6. Docker
@@ -192,13 +192,13 @@ python -m aria_x serve --host 127.0.0.1 --port 8787
 ### 6.1 构建与运行
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.2.0 .
+docker build -f docker/Dockerfile -t aria-x:0.2.1 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.2.0
+  aria-x:0.2.1
 ```
 
 镜像只包含 ARIA-X 本体（标准库），**不包含**扫描工具。镜像默认以 UID 10001 的非 root 用户运行；
@@ -252,7 +252,7 @@ sqlite3 data/aria-x.db ".backup 'aria-x-backup.db'" # 物理备份（需要 sqli
   `data/aria-x.db` 本身；
 - 直接把备份的 `aria-x.db`/`runs/` 放回原位置，然后 `aria-x projects` 验证。
 
-升级：ARIA-X 处于 v0.1，schema 可能变化。升级前备份 `data/` 与 `runs/`；若启动时报
+升级：ARIA-X 处于 0.x（pre-1.0），schema 可能变化。升级前备份 `data/` 与 `runs/`；若启动时报
 schema 不兼容，保留备份并查阅 release notes。
 
 ## 8. 排障
@@ -270,7 +270,7 @@ schema 不兼容，保留备份并查阅 release notes。
 | 预算是 `budget` 状态 | 正常收尾；调大 `budget.*` 或缩窄目标 |
 | 工具一直 scope 拒绝 | `python -m aria_x tools` 看 `scope_check`；确认 URL 主机/端口/前缀覆盖 |
 | Web 控制台 401 | 设置/携带 `Authorization: Bearer $ARIA_X_AUTH_TOKEN` |
-| SSE 不更新 | 反代需关闭 buffering；或用 `?token=` 直连 |
+| SSE 不更新 | 反代需关闭 buffering；或携带 `Authorization: Bearer $ARIA_X_AUTH_TOKEN` 直连 |
 | 运行卡住 | 查看 `/api/runs/<id>` 的 tasks 与 `data/events.jsonl`；`POST /api/runs/<id>/stop` |
 
 ## 9. 生产前检查清单
@@ -291,7 +291,7 @@ schema 不兼容，保留备份并查阅 release notes。
 # 停止进程后
 rm -rf data runs                      # ⚠️ 会删除全部 engagement 状态与报告
 docker ps -a --filter name=aria-x- --format '{{.ID}}' | xargs -r docker rm -f
-docker image rm aria-x:0.2.0 aria-x-kali:latest 2>/dev/null || true
+docker image rm aria-x:0.2.1 aria-x-kali:latest 2>/dev/null || true
 ```
 
 删除前请确认路径，避免误删其他项目。

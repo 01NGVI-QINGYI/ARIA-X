@@ -114,6 +114,280 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             cfg.validate()
 
+    def test_public_dict_allowlist_masks_secrets_and_preserves_live_config(self) -> None:
+        import json
+
+        cfg = AriaXConfig()
+        cfg.llm.provider = "openai"
+        cfg.llm.api_key = "sk-synth-abcd1234567890-xy99"
+        cfg.llm.base_url = "https://synthuser:synthpass@gateway.example.test:8443/v1?api_key=synthq&sig=42#frag"
+        cfg.llm.extra_headers = {
+            "Authorization": "Bearer synth-hdr-secret",
+            "X-Custom-Opaque": "synth-custom-hdr",
+        }
+        cfg.llm.extra_body = {
+            "custom_cred": "synth-body-secret",
+            "nested": {"opaque_tok": "synth-nested-secret"},
+        }
+        cfg.llm.scenario = "synth-scenario-secret"
+        cfg.sandbox.env = {
+            "AWS_SECRET_ACCESS_KEY": "synth-aws",
+            "MY_OPAQUE_ENV": "synth-opaque-env",
+        }
+        cfg.sandbox.extra_args = ["-e", "DOCKER_OPAQUE=synth-arg-secret"]
+        cfg.server.auth_token = "synth-auth-token-9999"
+        cfg.scope.targets = ["127.0.0.1", "https://suser:spass@lab.example.test:8443/api?tok=stoken"]
+        cfg.scope.deny = ["https://duser:dpass@deny.example.test/path?x=secret"]
+        cfg.scope.notes = "synth-note-secret"
+        cfg.safety.note = "synth-safety-note"
+
+        pub = cfg.public_dict()
+        dumped = json.dumps(pub)
+
+        self.assertEqual(pub["llm"]["api_key"], "***")
+        self.assertEqual(pub["server"]["auth_token"], "***")
+        self.assertEqual(pub["llm"]["base_url"], "https://gateway.example.test:8443/v1")
+        self.assertEqual(pub["scope"]["targets"], ["127.0.0.1", "https://lab.example.test:8443/api"])
+        self.assertEqual(pub["scope"]["deny"], ["https://deny.example.test/path"])
+
+        for excluded in ("extra_headers", "extra_body", "scenario"):
+            self.assertNotIn(excluded, pub["llm"])
+        for excluded in ("env", "extra_args"):
+            self.assertNotIn(excluded, pub["sandbox"])
+        self.assertNotIn("notes", pub["scope"])
+        self.assertNotIn("note", pub["safety"])
+
+        for forbidden in (
+            "sk-synth-abcd1234567890-xy99", "sk-s", "xy99",
+            "synthuser", "synthpass", "synthq", "sig=42",
+            "synth-hdr-secret", "X-Custom-Opaque", "synth-custom-hdr",
+            "custom_cred", "synth-body-secret", "opaque_tok", "synth-nested-secret",
+            "synth-scenario-secret", "AWS_SECRET_ACCESS_KEY", "synth-aws",
+            "MY_OPAQUE_ENV", "synth-opaque-env", "DOCKER_OPAQUE", "synth-arg-secret",
+            "synth-auth-token-9999", "suser", "spass", "stoken",
+            "duser", "dpass", "synth-note-secret", "synth-safety-note",
+        ):
+            self.assertNotIn(forbidden, dumped)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            saved_path = cfg.save(Path(tmp) / "saved.json")
+            saved_text = saved_path.read_text(encoding="utf-8")
+            saved_obj = json.loads(saved_text)
+            self.assertTrue(saved_obj.get("_redacted_export"))
+            self.assertNotIn("sk-synth-abcd1234567890-xy99", saved_text)
+            self.assertNotIn("synth-auth-token-9999", saved_text)
+            self.assertNotIn("synth-custom-hdr", saved_text)
+            self.assertNotIn("synth-opaque-env", saved_text)
+            with self.assertRaises(ConfigError):
+                AriaXConfig.load(saved_path)
+            with self.assertRaises(ConfigError):
+                AriaXConfig.from_dict(saved_obj)
+
+            exported_path = cfg.export_public(Path(tmp) / "exported.json")
+            exported_obj = json.loads(exported_path.read_text(encoding="utf-8"))
+            self.assertTrue(exported_obj.get("_redacted_export"))
+            with self.assertRaises(ConfigError):
+                AriaXConfig.load(exported_path)
+
+        # Mutating returned dict must not affect live config
+        pub["llm"]["api_key"] = "mutated"
+        pub["scope"]["targets"].append("evil.test")
+        self.assertEqual(cfg.llm.api_key, "sk-synth-abcd1234567890-xy99")
+        self.assertEqual(cfg.llm.extra_headers["X-Custom-Opaque"], "synth-custom-hdr")
+        self.assertEqual(cfg.llm.extra_body["nested"]["opaque_tok"], "synth-nested-secret")
+        self.assertEqual(cfg.sandbox.env["MY_OPAQUE_ENV"], "synth-opaque-env")
+        self.assertEqual(cfg.server.auth_token, "synth-auth-token-9999")
+
+    def test_save_private_round_trip_permissions_and_placeholder_rejection(self) -> None:
+        import json
+        import os
+        import stat
+        from unittest import mock
+
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("ARIA_X_")}
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cfg = AriaXConfig(
+                    name="Private Roundtrip",
+                    data_dir=str(root / "data"),
+                    runs_dir=str(root / "runs"),
+                    log_level="DEBUG",
+                )
+                cfg.llm.provider = "openai"
+                cfg.llm.model = "deepseek-chat"
+                cfg.llm.api_key = "sk-synth-roundtrip-9999"
+                cfg.llm.base_url = "https://u:p@gw.example.test:8443/v1?k=q"
+                cfg.llm.role_models = {"planner": "m1"}
+                cfg.llm.extra_headers = {"Authorization": "Bearer synth-hdr", "X-Custom": "val"}
+                cfg.llm.extra_body = {"custom_flag": True, "nested": {"k": "v", "nums": [1, 2]}}
+                cfg.llm.scenario = "scenarios/demo.json"
+                cfg.sandbox.backend = "docker"
+                cfg.sandbox.env = {"SYNTH_TOKEN": "tok-123", "FOO": "bar"}
+                cfg.sandbox.extra_args = ["--cpus=2", "-e", "A=B"]
+                cfg.scope.authorized = True
+                cfg.scope.targets = ["127.0.0.1", "https://u1:p1@target.test/app?x=1"]
+                cfg.scope.deny = ["10.0.0.0/8"]
+                cfg.scope.notes = "synth scope note"
+                cfg.safety.approval = "ask"
+                cfg.safety.extra_blocked_patterns = ["forbidden_cmd"]
+                cfg.safety.note = "synth safety note"
+                cfg.server.auth_token = "synth-srv-tok-777"
+
+                target = root / "private.json"
+                # Pre-create with permissive mode to ensure atomic replace enforces 0o600
+                target.write_text("{}", encoding="utf-8")
+                if os.name == "posix":
+                    os.chmod(target, 0o644)
+
+                saved = cfg.save_private(target)
+                if os.name == "posix":
+                    self.assertEqual(stat.S_IMODE(saved.stat().st_mode), 0o600)
+
+                reloaded = AriaXConfig.load(saved)
+                self.assertEqual(reloaded.name, "Private Roundtrip")
+                self.assertEqual(reloaded.log_level, "DEBUG")
+                self.assertEqual(reloaded.llm.provider, "openai")
+                self.assertEqual(reloaded.llm.api_key, "sk-synth-roundtrip-9999")
+                self.assertEqual(reloaded.llm.base_url, "https://u:p@gw.example.test:8443/v1?k=q")
+                self.assertEqual(reloaded.llm.role_models, {"planner": "m1"})
+                self.assertEqual(reloaded.llm.extra_headers, {"Authorization": "Bearer synth-hdr", "X-Custom": "val"})
+                self.assertEqual(reloaded.llm.extra_body, {"custom_flag": True, "nested": {"k": "v", "nums": [1, 2]}})
+                self.assertEqual(reloaded.llm.scenario, "scenarios/demo.json")
+                self.assertEqual(reloaded.sandbox.backend, "docker")
+                self.assertEqual(reloaded.sandbox.env, {"SYNTH_TOKEN": "tok-123", "FOO": "bar"})
+                self.assertEqual(reloaded.sandbox.extra_args, ["--cpus=2", "-e", "A=B"])
+                self.assertTrue(reloaded.scope.authorized)
+                self.assertEqual(reloaded.scope.targets, ["127.0.0.1", "https://u1:p1@target.test/app?x=1"])
+                self.assertEqual(reloaded.scope.deny, ["10.0.0.0/8"])
+                self.assertEqual(reloaded.scope.notes, "synth scope note")
+                self.assertEqual(reloaded.safety.approval, "ask")
+                self.assertEqual(reloaded.safety.extra_blocked_patterns, ["forbidden_cmd"])
+                self.assertEqual(reloaded.safety.note, "synth safety note")
+                self.assertEqual(reloaded.server.auth_token, "synth-srv-tok-777")
+
+                # Original live object unchanged
+                self.assertEqual(cfg.llm.api_key, "sk-synth-roundtrip-9999")
+                self.assertEqual(cfg.server.auth_token, "synth-srv-tok-777")
+
+                # Legacy redacted export without _redacted_export marker must still be refused
+                legacy_key = root / "legacy_key.json"
+                legacy_key.write_text(json.dumps({"llm": {"provider": "openai", "api_key": "***"}}), encoding="utf-8")
+                with self.assertRaises(ConfigError):
+                    AriaXConfig.load(legacy_key)
+
+                legacy_tok = root / "legacy_tok.json"
+                legacy_tok.write_text(json.dumps({"server": {"auth_token": "***"}}), encoding="utf-8")
+                with self.assertRaises(ConfigError):
+                    AriaXConfig.load(legacy_tok)
+
+                bad_cfg = AriaXConfig()
+                bad_cfg.llm.api_key = "***"
+                with self.assertRaises(ConfigError):
+                    bad_cfg.save_private(root / "bad1.json")
+                bad_cfg2 = AriaXConfig()
+                bad_cfg2.server.auth_token = "***"
+                with self.assertRaises(ConfigError):
+                    bad_cfg2.save_private(root / "bad2.json")
+
+    def test_save_private_requires_json_suffix_and_preserves_existing_file(self) -> None:
+        from unittest import mock
+
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("ARIA_X_")}
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cfg = AriaXConfig(name="Suffix Test")
+                toml_path = root / "aria-x.toml"
+                original = "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n# keep-me\n"
+                toml_path.write_text(original, encoding="utf-8")
+
+                with self.assertRaises(ConfigError):
+                    cfg.save_private(toml_path)
+                self.assertEqual(toml_path.read_text(encoding="utf-8"), original)
+                self.assertEqual(list(root.glob(".*tmp")), [])
+
+                for bad_name in ("aria-x.cfg", "aria-x"):
+                    bad_path = root / bad_name
+                    with self.assertRaises(ConfigError):
+                        cfg.save_private(bad_path)
+                    self.assertFalse(bad_path.exists())
+
+                upper_json = cfg.save_private(root / "private.JSON")
+                reloaded = AriaXConfig.load(upper_json)
+                self.assertEqual(reloaded.name, "Suffix Test")
+
+    def test_export_public_and_save_require_json_suffix_and_preserve_target(self) -> None:
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = AriaXConfig(name="Export Suffix Test")
+            toml_path = root / "aria-x.toml"
+            original = "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n# keep-me\n"
+            toml_path.write_text(original, encoding="utf-8")
+
+            for fn in (cfg.export_public, cfg.save):
+                with self.assertRaises(ConfigError):
+                    fn(toml_path)
+                self.assertEqual(toml_path.read_text(encoding="utf-8"), original)
+
+                deep_toml = root / "deep" / "nested" / "aria-x.toml"
+                with self.assertRaises(ConfigError):
+                    fn(deep_toml)
+                self.assertFalse((root / "deep").exists())
+
+                for bad_name in ("aria-x.cfg", "aria-x"):
+                    bad_path = root / bad_name
+                    with self.assertRaises(ConfigError):
+                        fn(bad_path)
+                    self.assertFalse(bad_path.exists())
+
+            pub_path = cfg.export_public(root / "pub.JSON")
+            self.assertTrue(json.loads(pub_path.read_text(encoding="utf-8")).get("_redacted_export"))
+            save_path = cfg.save(root / "saved.JSON")
+            self.assertTrue(json.loads(save_path.read_text(encoding="utf-8")).get("_redacted_export"))
+
+    def test_export_public_and_save_refuse_to_overwrite_existing_json(self) -> None:
+        from unittest import mock
+
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("ARIA_X_")}
+        with mock.patch.dict(os.environ, clean_env, clear=True):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                cfg = AriaXConfig(
+                    name="Live Private Config",
+                    data_dir=str(root / "data"),
+                    runs_dir=str(root / "runs"),
+                )
+                cfg.llm.provider = "openai"
+                cfg.llm.api_key = "sk-synth-live-keep-1234"
+                cfg.llm.extra_headers = {"X-Keep": "hdr-val"}
+                cfg.sandbox.env = {"KEEP_ENV": "env-val"}
+                cfg.scope.notes = "keep-note"
+                cfg.server.auth_token = "synth-live-tok-5678"
+
+                private_path = cfg.save_private(root / "aria-x.json")
+                original_bytes = private_path.read_bytes()
+
+                for fn in (cfg.export_public, cfg.save):
+                    with self.assertRaises(ConfigError):
+                        fn(private_path)
+                    self.assertEqual(private_path.read_bytes(), original_bytes)
+
+                reloaded = AriaXConfig.load(private_path)
+                self.assertEqual(reloaded.llm.api_key, "sk-synth-live-keep-1234")
+                self.assertEqual(reloaded.server.auth_token, "synth-live-tok-5678")
+                self.assertEqual(reloaded.llm.extra_headers, {"X-Keep": "hdr-val"})
+                self.assertEqual(reloaded.sandbox.env, {"KEEP_ENV": "env-val"})
+                self.assertEqual(reloaded.scope.notes, "keep-note")
+
+                export_path = root / "public-snapshot.json"
+                cfg.export_public(export_path)
+                for fn in (cfg.export_public, cfg.save):
+                    with self.assertRaises(ConfigError):
+                        fn(export_path)
+
 
 class ScopeTests(unittest.TestCase):
     def _scope(self, **kwargs) -> Scope:
@@ -174,6 +448,20 @@ class EventTests(unittest.TestCase):
         self.assertEqual(bus.replay(5)[0].type, "run.started")
         self.assertIn("event: run.started", event.sse())
         sub.close()
+
+    def test_subscribe_with_snapshot_has_no_gap_or_duplicate(self) -> None:
+        bus = EventBus(replay=10)
+        first = bus.emit("log", project_id="p1", data={"seq": 1})
+        sub, snap = bus.subscribe_with_snapshot()
+        try:
+            self.assertEqual([e.id for e in snap], [first.id])
+            second = bus.emit("log", project_id="p1", data={"seq": 2})
+            third = bus.emit("log", project_id="p1", data={"seq": 3})
+            self.assertEqual(sub.get(timeout=1).id, second.id)
+            self.assertEqual(sub.get(timeout=1).id, third.id)
+            self.assertEqual(sub.drain(), [])
+        finally:
+            sub.close()
 
 
 class LLMTests(unittest.TestCase):

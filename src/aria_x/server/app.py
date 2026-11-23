@@ -14,21 +14,23 @@ The API itself lives in :mod:`aria_x.server.api`.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
 import mimetypes
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 from .. import TAGLINE, __version__
 from ..config import AriaXConfig
 from ..errors import AriaXError
 from ..events import EventBus
 from ..store import Store
-from ..util import json_dumps
+from ..util import json_dumps, redact
 from .api import Api, RequestError, Response, StreamResponse, response_for_error
 
 logger = logging.getLogger("aria_x.server")
@@ -57,6 +59,114 @@ _CSP = (
     "img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-src 'self'; "
     "base-uri 'none'; form-action 'self'; object-src 'none'"
 )
+
+_EXACT_LOG_ROUTES = frozenset({
+    "/",
+    "/index.html",
+    "/favicon.ico",
+    "/static",
+    "/api/health",
+    "/api/config",
+    "/api/projects",
+    "/api/approvals",
+})
+
+_TEMPLATE_LOG_ROUTES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"/api/projects/[^/]+"), "/api/projects/{project_id}"),
+    (re.compile(r"/api/projects/[^/]+/graph"), "/api/projects/{project_id}/graph"),
+    (re.compile(r"/api/projects/[^/]+/traces"), "/api/projects/{project_id}/traces"),
+    (re.compile(r"/api/projects/[^/]+/audit"), "/api/projects/{project_id}/audit"),
+    (re.compile(r"/api/projects/[^/]+/report"), "/api/projects/{project_id}/report"),
+    (re.compile(r"/api/projects/[^/]+/runs"), "/api/projects/{project_id}/runs"),
+    (re.compile(r"/api/projects/[^/]+/hints"), "/api/projects/{project_id}/hints"),
+    (re.compile(r"/api/projects/[^/]+/events"), "/api/projects/{project_id}/events"),
+    (re.compile(r"/api/runs/[^/]+"), "/api/runs/{run_id}"),
+    (re.compile(r"/api/runs/[^/]+/stop"), "/api/runs/{run_id}/stop"),
+    (re.compile(r"/api/approvals/[^/]+"), "/api/approvals/{approval_id}"),
+    (re.compile(r"/api/report/[^/]+"), "/api/report/{run_id}"),
+    (re.compile(r"/api/export/[^/]+"), "/api/export/{project_id}"),
+)
+
+_NAMED_REDACTED_QUERY_KEYS = frozenset({"token", "project_id", "task_id"})
+_ALLOWED_FORMAT_VALUES = frozenset({"html", "md", "markdown"})
+_ALLOWED_STATUS_VALUES = frozenset({"pending", "approved", "denied", "all"})
+_QUERY_IN_TEXT_RE = re.compile(r"\?([^\s\"'<>]+)")
+
+
+def _path_digest(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def _normalize_log_path(raw_target_or_path: str) -> str:
+    raw = str(raw_target_or_path or "")
+    if not raw:
+        return "/"
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return f"<unparseable:{_path_digest(raw)}>"
+    raw_path = parts.path or "/"
+    unquoted = unquote(raw_path)
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in raw_path) or any(
+        ord(ch) < 32 or ord(ch) == 127 for ch in unquoted
+    ):
+        return f"<unparseable:{_path_digest(raw_path)}>"
+    norm = unquoted.rstrip("/") or "/"
+    if norm in _EXACT_LOG_ROUTES:
+        return norm
+    if norm.startswith("/static/"):
+        return "/static/{asset}"
+    for pattern, template in _TEMPLATE_LOG_ROUTES:
+        if pattern.fullmatch(norm):
+            return template
+    if norm == "/api" or norm.startswith("/api/"):
+        return f"/api/<unknown:{_path_digest(raw_path)}>"
+    return f"/<unknown:{_path_digest(raw_path)}>"
+
+
+def _sanitize_query(raw_query: str) -> str:
+    if not raw_query:
+        return ""
+    parts: list[str] = []
+    for key, value in parse_qsl(raw_query, keep_blank_values=True):
+        lk = key.lower()
+        val = str(value or "")
+        if lk in {"replay", "limit"}:
+            if val.isdigit() and len(val) <= 8:
+                parts.append(f"{lk}={val}")
+            else:
+                parts.append(f"{lk}=[REDACTED]")
+        elif lk == "format":
+            low = val.lower()
+            parts.append(f"format={low}" if low in _ALLOWED_FORMAT_VALUES else "format=[REDACTED]")
+        elif lk == "status":
+            low = val.lower()
+            parts.append(f"status={low}" if low in _ALLOWED_STATUS_VALUES else "status=[REDACTED]")
+        elif lk in _NAMED_REDACTED_QUERY_KEYS:
+            parts.append(f"{lk}=[REDACTED]")
+        else:
+            parts.append("[REDACTED]")
+    return "&".join(parts)
+
+
+def _sanitize_request_target(raw_target: str) -> str:
+    text = str(raw_target or "")
+    if not text:
+        return "/"
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return f"<unparseable:{_path_digest(text)}>"
+    norm_path = _normalize_log_path(parts.path or "/")
+    clean_query = _sanitize_query(parts.query)
+    return f"{norm_path}?{clean_query}" if clean_query else norm_path
+
+
+def _sanitize_log_text(text: str) -> str:
+    if not text:
+        return ""
+    masked = _QUERY_IN_TEXT_RE.sub(lambda m: f"?{_sanitize_query(m.group(1))}", str(text))
+    return redact(masked)
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +230,30 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
 
     # -- logging -----------------------------------------------------------
 
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        code_str = str(code)
+        if getattr(self, "command", None) and getattr(self, "request_version", None):
+            req_line = (
+                f"{self.command} "
+                f"{_sanitize_request_target(getattr(self, 'path', '') or '')} "
+                f"{self.request_version}"
+            )
+        else:
+            req_line = "<malformed-request>"
+        self.log_message('"%s" %s %s', req_line, code_str, str(size))
+
     def log_message(self, fmt: str, *args: Any) -> None:
-        logger.debug("%s - %s", self.address_string(), fmt % args)
+        msg = fmt % args if args else str(fmt)
+        logger.debug("%s - %s", self.address_string(), _sanitize_log_text(msg))
 
     def log_error(self, fmt: str, *args: Any) -> None:
-        logger.debug("%s - %s", self.address_string(), fmt % args)
+        code = args[0] if args and isinstance(args[0], int) else "-"
+        logger.warning(
+            "%s - http error code=%s route=%s",
+            self.address_string(),
+            code,
+            _normalize_log_path(getattr(self, "path", "") or ""),
+        )
 
     # -- core dispatch -----------------------------------------------------
 
@@ -159,8 +288,13 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
                           head=(method == "HEAD"))
         except (BrokenPipeError, ConnectionResetError):
             return
-        except Exception:  # pragma: no cover - defensive: never leak tracebacks
-            logger.exception("unhandled server error for %s %s", method, self.path)
+        except Exception as exc:  # pragma: no cover - defensive: never leak tracebacks or raw bodies
+            logger.error(
+                "unhandled server error method=%s route=%s status=500 error_type=%s",
+                method,
+                _normalize_log_path(getattr(self, "path", "") or ""),
+                type(exc).__name__,
+            )
             try:
                 self._respond(Response.error("internal_error", "internal server error", 500))
             except Exception:
@@ -181,18 +315,47 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
             except RequestError as exc:
                 self._respond(response_for_error(exc))
                 return
+        req_headers: dict[str, str] = {}
+        last_event_id = self.headers.get("Last-Event-ID", "")
+        if last_event_id:
+            req_headers["Last-Event-ID"] = last_event_id
         try:
-            result = self.server.api.dispatch(method, path, query, body)  # type: ignore[attr-defined]
+            result = self.server.api.dispatch(  # type: ignore[attr-defined]
+                method, path, query, body, headers=req_headers,
+            )
         except RequestError as exc:
+            logger.debug(
+                "API request error method=%s route=%s status=%d code=%s error_type=%s",
+                method,
+                _normalize_log_path(path),
+                exc.status,
+                exc.code,
+                type(exc).__name__,
+            )
             self._respond(response_for_error(exc), extra_headers=exc.headers)
             return
         except AriaXError as exc:
-            logger.debug("API error %s: %s %s", exc.code, method, path)
-            self._respond(response_for_error(exc))
+            err_resp = response_for_error(exc)
+            logger.debug(
+                "API error method=%s route=%s status=%d code=%s error_type=%s",
+                method,
+                _normalize_log_path(path),
+                err_resp.status,
+                exc.code,
+                type(exc).__name__,
+            )
+            self._respond(err_resp)
             return
         except BaseException as exc:  # noqa: BLE001 - translated by response_for_error
-            logger.exception("API request failed: %s %s", method, path)
-            self._respond(response_for_error(exc))
+            err_resp = response_for_error(exc)
+            logger.error(
+                "API request failed method=%s route=%s status=%d error_type=%s",
+                method,
+                _normalize_log_path(path),
+                err_resp.status,
+                type(exc).__name__,
+            )
+            self._respond(err_resp)
             return
         if isinstance(result, StreamResponse):
             self._stream(result)
@@ -206,7 +369,7 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
         for key, value in self._common_headers().items():
             self.send_header(key, value)
         self.send_header("Access-Control-Allow-Methods", "GET, POST, HEAD, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-ARIA-X-Token")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Last-Event-ID, X-ARIA-X-Token")
         self.send_header("Access-Control-Max-Age", "600")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -231,11 +394,6 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
         supplied = self.headers.get("X-ARIA-X-Token", "") or ""
         if supplied and hmac.compare_digest(supplied, token):
             return True
-        # EventSource cannot set headers, so the SSE route also accepts ?token=.
-        if normalised.endswith("/events"):
-            candidate = (query.get("token") or [""])[0]
-            if candidate and hmac.compare_digest(str(candidate), token):
-                return True
         return False
 
     # -- body --------------------------------------------------------------

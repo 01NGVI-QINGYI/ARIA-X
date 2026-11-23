@@ -50,6 +50,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, "token=supersecret123")
         elif self.path == "/echo":
             self._send(200, "auth=" + self.headers.get("Authorization", "none"))
+        elif self.path == "/ua":
+            self._send(200, self.headers.get("User-Agent", ""))
         else:
             self._send(404, "unknown")
 
@@ -457,6 +459,17 @@ class ToolTestCase(unittest.TestCase):
         self.assertTrue(allowed.data["decision"]["allowed"])
         denied = self.run_tool("scope_check", target="http://192.0.2.1/")
         self.assertFalse(denied.data["decision"]["allowed"])
+
+    def test_user_agent_matches_package_version(self) -> None:
+        from aria_x import __version__
+        from aria_x.tools import net
+
+        expected = f"ARIA-X/{__version__} (authorized security research)"
+        self.assertEqual(net.USER_AGENT, expected)
+        self.assertNotIn("ARIA-X/0.1", net.USER_AGENT)
+        res = self.run_tool("http_request", url=f"{self.base}/ua")
+        self.assertTrue(res.ok, res.error)
+        self.assertEqual(res.data["body_excerpt"], expected)
 
 
 if __name__ == "__main__":

@@ -74,7 +74,13 @@
     timelineFilter: "",
     timelineType: "",
     sseConnected: false,
-    es: null,
+    sseSeq: 0,
+    sseAbort: null,
+    sseReconnectTimer: null,
+    sseRetryMs: 3000,
+    sseFailureCount: 0,
+    sseLastEventId: "",
+    seenEventIds: new Set(),
     pollTimer: null,
     refreshing: false,
     refreshSeq: 0,
@@ -405,6 +411,8 @@
     state.selectedFindingId = "";
     state.events = [];
     state.eventTypes = new Set();
+    state.sseLastEventId = "";
+    state.seenEventIds = new Set();
     renderTimelineEvents();
     resetReportView(state.projectId ? "initial" : "noProject");
     resetGraphView();
@@ -428,8 +436,7 @@
     $("approval-count").textContent = t("approvals.pending", { count: 0 });
     resetReportView("noProject");
     resetGraphView();
-    if (state.es) { state.es.close(); state.es = null; }
-    setSseStatus(false);
+    disconnectSSE();
   }
 
   async function refreshProject({ full = false, force = false } = {}) {
@@ -1330,12 +1337,22 @@
   }
 
   function onSseEvent(event) {
+    const rawId = event && event.lastEventId ? String(event.lastEventId) : "";
+    if (rawId) {
+      if (state.seenEventIds.has(rawId)) return;
+      state.seenEventIds.add(rawId);
+      if (state.seenEventIds.size > 1500) {
+        const oldest = state.seenEventIds.values().next().value;
+        if (oldest !== undefined) state.seenEventIds.delete(oldest);
+      }
+      state.sseLastEventId = rawId;
+    }
     let data = {};
     if (event.data) {
       try { data = JSON.parse(event.data); } catch { data = { raw: event.data }; }
     }
     const item = {
-      id: event.lastEventId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: rawId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       type: event.type || "message",
       ts: (data && data.ts) || new Date().toISOString(),
       data,
@@ -1388,23 +1405,162 @@
     $("timeline-pulse").classList.toggle("on", state.sseConnected);
   }
 
-  function connectSSE() {
-    if (state.es) {
-      state.es.close();
-      state.es = null;
+  const SSE_STABLE_MS = 2000;
+
+  function disconnectSSE({ resetBackoff = true } = {}) {
+    state.sseSeq += 1;
+    if (resetBackoff) state.sseFailureCount = 0;
+    if (state.sseReconnectTimer) {
+      window.clearTimeout(state.sseReconnectTimer);
+      state.sseReconnectTimer = null;
+    }
+    if (state.sseAbort) {
+      try { state.sseAbort.abort(); } catch { /* ignore */ }
+      state.sseAbort = null;
     }
     setSseStatus(false);
+  }
+
+  function scheduleSseReconnect(streamSeq, projectId, { isFailure = false } = {}) {
+    if (streamSeq !== state.sseSeq || !projectId || state.projectId !== projectId) return;
+    if (state.sseReconnectTimer) window.clearTimeout(state.sseReconnectTimer);
+    const base = Math.max(250, Math.min(30000, Number(state.sseRetryMs) || 3000));
+    let delay = base;
+    if (isFailure) {
+      state.sseFailureCount = Math.min((Number(state.sseFailureCount) || 0) + 1, 10);
+      delay = Math.min(30000, base * (2 ** Math.min(state.sseFailureCount - 1, 6)));
+    } else {
+      state.sseFailureCount = 0;
+    }
+    state.sseReconnectTimer = window.setTimeout(() => {
+      state.sseReconnectTimer = null;
+      if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+      connectSSE({ preserveBackoff: true });
+    }, delay);
+  }
+
+  function dispatchSseFrame(frame, streamSeq, projectId) {
+    if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+    let eventType = "message";
+    let eventId = null;
+    const dataLines = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (!line || line.startsWith(":")) continue;
+      const colon = line.indexOf(":");
+      const field = colon === -1 ? line : line.slice(0, colon);
+      let value = colon === -1 ? "" : line.slice(colon + 1);
+      if (value.startsWith(" ")) value = value.slice(1);
+      if (field === "event") eventType = value || "message";
+      else if (field === "data") dataLines.push(value);
+      else if (field === "id") {
+        if (!value.includes("\u0000")) eventId = value;
+      } else if (field === "retry") {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed) && parsed > 0) {
+          state.sseRetryMs = Math.max(250, Math.min(30000, parsed));
+        }
+      }
+    }
+    if (!dataLines.length) return;
+    onSseEvent({
+      type: eventType,
+      data: dataLines.join("\n"),
+      lastEventId: eventId !== null ? eventId : "",
+    });
+  }
+
+  function connectSSE({ preserveBackoff = false } = {}) {
+    disconnectSSE({ resetBackoff: !preserveBackoff });
     if (!state.projectId) return;
-    const token = state.token ? `&token=${encodeURIComponent(state.token)}` : "";
-    const source = new EventSource(`/api/projects/${encodeURIComponent(state.projectId)}/events?replay=150${token}`);
-    state.es = source;
-    source.onopen = () => setSseStatus(true);
-    source.onerror = () => {
-      setSseStatus(false);
-      if ((state.config && state.config.auth_required) && !state.token) noteAuthFailure();
-    };
-    source.onmessage = onSseEvent;
-    for (const type of EVENT_TYPES) source.addEventListener(type, onSseEvent);
+    const projectId = state.projectId;
+    const streamSeq = state.sseSeq;
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    state.sseAbort = controller;
+    const headers = { Accept: "text/event-stream" };
+    if (state.token) headers.Authorization = `Bearer ${state.token}`;
+    if (state.sseLastEventId) headers["Last-Event-ID"] = state.sseLastEventId;
+    const init = { method: "GET", headers, cache: "no-store" };
+    if (controller) init.signal = controller.signal;
+    const url = `/api/projects/${encodeURIComponent(projectId)}/events?replay=150`;
+
+    (async () => {
+      let connectedAt = null;
+      try {
+        const response = await fetch(url, init);
+        if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+        if (!response || !response.ok) {
+          setSseStatus(false);
+          if (response && response.status === 401) {
+            state.sseFailureCount = 0;
+            noteAuthFailure();
+            return;
+          }
+          scheduleSseReconnect(streamSeq, projectId, { isFailure: true });
+          return;
+        }
+        connectedAt = Date.now();
+        setSseStatus(true);
+        const body = response.body;
+        if (!body || typeof body.getReader !== "function") {
+          const text = typeof response.text === "function" ? await response.text() : "";
+          if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+          const parts = String(text || "").split(/\r?\n\r?\n/);
+          parts.pop(); // discard any trailing unterminated fragment
+          for (const frame of parts) {
+            if (frame) dispatchSseFrame(frame, streamSeq, projectId);
+          }
+          const isStable = (Date.now() - connectedAt) >= SSE_STABLE_MS;
+          if (isStable) state.sseFailureCount = 0;
+          setSseStatus(false);
+          scheduleSseReconnect(streamSeq, projectId, { isFailure: !isStable });
+          return;
+        }
+        const reader = body.getReader();
+        const decoder = typeof TextDecoder === "function" ? new TextDecoder("utf-8") : null;
+        let buffer = "";
+        while (streamSeq === state.sseSeq && state.projectId === projectId) {
+          const chunk = await reader.read();
+          if (streamSeq !== state.sseSeq || state.projectId !== projectId) {
+            try { reader.cancel(); } catch { /* ignore */ }
+            return;
+          }
+          if (chunk.done) break;
+          if (chunk.value !== undefined) {
+            buffer += typeof chunk.value === "string"
+              ? chunk.value
+              : (decoder ? decoder.decode(chunk.value, { stream: true }) : String(chunk.value));
+            const parts = buffer.split(/\r?\n\r?\n/);
+            buffer = parts.pop() || "";
+            for (const frame of parts) {
+              if (frame) dispatchSseFrame(frame, streamSeq, projectId);
+            }
+          }
+        }
+        if (decoder) {
+          buffer += decoder.decode();
+          const tailParts = buffer.split(/\r?\n\r?\n/);
+          buffer = tailParts.pop() || "";
+          for (const frame of tailParts) {
+            if (frame) dispatchSseFrame(frame, streamSeq, projectId);
+          }
+        }
+        // Any remaining unterminated fragment in `buffer` at EOF is intentionally discarded.
+        if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+        const isStable = (Date.now() - connectedAt) >= SSE_STABLE_MS;
+        if (isStable) state.sseFailureCount = 0;
+        setSseStatus(false);
+        scheduleSseReconnect(streamSeq, projectId, { isFailure: !isStable });
+      } catch (error) {
+        if (controller && controller.signal && controller.signal.aborted) return;
+        if (error && error.name === "AbortError") return;
+        if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
+        if (connectedAt !== null && (Date.now() - connectedAt) >= SSE_STABLE_MS) {
+          state.sseFailureCount = 0;
+        }
+        setSseStatus(false);
+        scheduleSseReconnect(streamSeq, projectId, { isFailure: true });
+      }
+    })();
   }
 
   // ------------------------------------------------------------------ report
@@ -1835,6 +1991,7 @@
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) refreshProject().catch(() => {});
     });
+    window.addEventListener("beforeunload", disconnectSSE);
     document.addEventListener("keydown", (event) => {
       if (isTypingTarget(event.target) || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.key.toLowerCase() === "r") {

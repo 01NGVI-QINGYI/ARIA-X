@@ -3,6 +3,87 @@
 All notable changes to ARIA-X are documented here. ARIA-X is pre-1.0; interfaces may
 change, but persisted schema changes will include a migration note.
 
+## [0.2.1] — 2026-11-23
+
+### Breaking Changes & Migration
+
+- **SSE authentication migration (`?token=` query-string auth removed)**:
+  When `server.auth_token` / `ARIA_X_AUTH_TOKEN` is configured, requests passing only
+  `?token=<token>` on `GET /api/projects/{id}/events` are now **rejected with
+  `401 Unauthorized`** so long-lived credentials are no longer sent in SSE request URLs
+  (avoiding query-string token exposure in HTTP server and proxy access logs). External
+  SSE consumers must migrate to `Authorization: Bearer <token>` or
+  `X-ARIA-X-Token: <token>` request headers; the built-in Web Console
+  (`src/aria_x/web/app.js`) has been migrated from `EventSource` to streaming `fetch`
+  with `Authorization: Bearer` and `Last-Event-ID`.
+- **`AriaXConfig.save()` is now a non-reloadable redacted export (`save_private()` added)**:
+  `AriaXConfig.save()` now delegates to `AriaXConfig.export_public()` and writes a
+  shareable `_redacted_export: true` JSON snapshot to a new `.json` file (`open("x")`,
+  refusing to overwrite existing files) that `AriaXConfig.from_dict()` and
+  `AriaXConfig.load()` reject with `ConfigError` (literal `"***"` placeholders are also
+  rejected as runtime credentials). Callers needing reloadable local persistence must
+  explicitly call `AriaXConfig.save_private("<path>.json")` (`.json` suffix required;
+  atomic write with owner-only `0o600` permissions).
+
+### Security
+
+- **Explicit `/api/config` public allowlist & full credential masking**:
+  `AriaXConfig.public_dict()` constructs an explicit allowlist of non-sensitive fields
+  instead of cloning `to_dict()`, masks non-empty `llm.api_key` and `server.auth_token`
+  uniformly as `"***"` (removing partial prefix/suffix key fragments), strips userinfo,
+  query parameters, and fragments from `llm.base_url`, `scope.targets`, and `scope.deny`
+  (including `scope_summary`), and excludes `llm.extra_headers`, `llm.extra_body`,
+  `llm.scenario`, `sandbox.env`, `sandbox.extra_args`, `scope.notes`, `safety.note`, and
+  any unknown/custom attributes without mutating live config.
+- **Separated shareable redacted export from reloadable private config persistence**:
+  Added `AriaXConfig.export_public()` and `AriaXConfig.save_private()`, both requiring a
+  `.json` suffix before creating directories or touching the target path; `export_public()`
+  and `save()` also use exclusive creation (`open("x")`) and refuse to overwrite existing
+  files, while `save_private()` preserves `extra_headers`, `extra_body`, `scenario`,
+  `sandbox.env`, `sandbox.extra_args`, `scope.notes`, `safety.note`, and credentials via
+  atomic write with `0o600` permissions.
+- **HTTP access, error, and exception log sanitization**:
+  Normalized logged request paths in `AriaXRequestHandler` using explicit route templates
+  (e.g., `/api/projects/{project_id}/events`, `/static/{asset}`) and hashed digests for
+  unknown or unparseable paths (`/<unknown:...>`, `/api/<unknown:...>`,
+  `<unparseable:...>`). Restricted query-string logging to validated `replay`, `limit`,
+  `format`, and `status` values while redacting `token`, `project_id`, `task_id`, and
+  unknown keys (`[REDACTED]`). Replaced `logger.exception(...)` and raw error formatting
+  with safe structured logs (`method`, normalized `route`, `status`, `error_type`) without
+  raw exception bodies, tracebacks, or request payloads.
+- **`local` sandbox isolation boundary notice**:
+  Documented in `docs/SECURITY.md` that `sandbox.backend = "local"` runs commands with
+  current OS user privileges (inheriting `HOME`, constraining only initial `cwd` and
+  `file_*` path jail, without OS-level filesystem isolation), and added a non-fatal
+  notice to `aria-x doctor` (human output and JSON `warning` field) without altering
+  exit codes.
+
+### Fixed
+
+- **SSE `Last-Event-ID` cursor resume & complete-frame-only client parsing**:
+  Added atomic `EventBus.subscribe_with_snapshot()` and wired `Last-Event-ID` from
+  `AriaXRequestHandler` through `Api.stream_events()` so in-buffer cursors matching the
+  current project stream replay all subsequent visible buffered events in order (even
+  beyond the initial `replay=150` window) and hand off across the replay/live boundary
+  without boundary gaps or duplicate event IDs within the bounded `EventBus` replay buffer
+  and subscriber queue capacity; missing, expired, or foreign-project cursors fall back to
+  bounded `replay`. Updated `src/aria_x/web/app.js` to discard incomplete trailing EOF
+  fragments (never entering timeline, `sseLastEventId`, or `seenEventIds`), removed unused
+  `state.es`, and counted both short-lived (`< 2s`) `200` EOFs and post-`200` read errors
+  toward bounded exponential backoff (`sseFailureCount`, capped at 30s) until a stream
+  stays stable for `>= 2s`, while preserving `401` stop, project-switch/clear abort, and
+  display-only i18n switching.
+
+### Maintenance
+
+- **Version `0.2.1` metadata & dynamic HTTP `User-Agent`**:
+  Bumped package, CLI, Docker tags, CITATION, and documentation references to `0.2.1`;
+  derived `aria_x.tools.net.USER_AGENT` from `__version__` instead of hardcoded
+  `"ARIA-X/0.1"`.
+- **Pinned Docker base image digest**: Pinned `docker/Dockerfile` `FROM` to the verified
+  official multi-arch OCI index digest for `python:3.12-slim` (`python:3.12.16-slim`,
+  `sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b`).
+
 ## [0.2.0] — 2026-11-22
 
 ### Added

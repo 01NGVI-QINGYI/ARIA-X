@@ -514,9 +514,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks: list[dict[str, Any]] = []
     ok_all = True
 
-    def check(name: str, ok: bool, detail: str, *, hard: bool = True) -> None:
+    def check(name: str, ok: bool, detail: str, *, hard: bool = True, warning: str = "") -> None:
         nonlocal ok_all
-        checks.append({"check": name, "ok": ok, "detail": detail})
+        entry: dict[str, Any] = {"check": name, "ok": ok, "detail": detail}
+        if warning:
+            entry["warning"] = warning
+        checks.append(entry)
         if hard and not ok:
             ok_all = False
 
@@ -559,6 +562,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         sandbox = build_sandbox(config.sandbox, Path(tempfile.mkdtemp(prefix="aria-x-doctor-")))
         ready, detail = sandbox.ensure_ready()
         check("sandbox", ready, detail)
+    elif config.sandbox.backend == "local":
+        check(
+            "sandbox",
+            True,
+            "local",
+            warning=(
+                "local backend runs commands with current user privileges; workdir checks only "
+                "constrain initial cwd and command filtering does not provide OS-level "
+                "filesystem isolation (use docker for stronger isolation)"
+            ),
+        )
     else:
         check("sandbox", True, config.sandbox.backend)
 
@@ -580,6 +594,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         for item in checks:
             mark = "✓" if item["ok"] else "✗"
             print(f"  {mark} {item['check']:<14} {item['detail']}")
+            if item.get("warning"):
+                print(f"  ! {'notice':<14} {item['warning']}")
         print("\nAll core checks passed." if ok_all else "\nSome checks failed; fix the ✗ items above.")
     return 0 if ok_all else 1
 

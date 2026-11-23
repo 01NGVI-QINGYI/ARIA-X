@@ -83,6 +83,16 @@ CLI 的 `aria-x run` 与 `Engagement.run/start_background` 都走同一检查。
 > **局限**：审批是"人在回路"，不是技术隔离。审批者可能疲劳、误点或在不了解上下文时
 > 放行；高风险 engagement 应配合 Docker 沙箱、网络分段与时间窗限制。
 
+### 1.4 沙箱后端边界（`local` 与 `docker`）
+
+- **`local` 后端（宿主权限，无 OS 级文件系统隔离）**：当 `sandbox.backend = "local"` 时，
+  `terminal_exec` 与交互式 `session_*` 命令以**当前操作系统用户的权限**运行，且子进程保留
+  `HOME` 环境变量。工作目录校验仅限制命令启动时的 `cwd`（以及 `file_*` 工具的路径 jail），
+  `CommandPolicy` 也只拦截已知破坏性指令，**不提供操作系统级文件系统隔离**——模型执行的
+  Shell 命令理论上仍可读取当前用户有权限访问的文件（如 `~/.ssh`、`~/.aws` 或浏览器数据）。
+- **隔离建议**：需要真正的文件系统与进程隔离时，请使用 `sandbox.backend = "docker"`（非 root、
+  `network = "none"`、不挂载 `/var/run/docker.sock`），或在专用低权限账号/隔离虚拟机中运行。
+
 ## 2. 威胁模型
 
 ### 2.1 我们要防的
@@ -92,8 +102,8 @@ CLI 的 `aria-x run` 与 `Engagement.run/start_background` 都走同一检查。
 | 误测未授权目标 | 启动门 + scope + deny + 默认只允许回环/私网；文档反复强调 |
 | 模型"自作主张"扩张范围 | planner 独占意图、scope 在工具层强制、工具集按角色收敛 |
 | 破坏性命令 | `CommandPolicy` 黑名单（`rm -rf /`、`mkfs`、`dd of=/dev/*`、fork bomb、关机、`curl|bash`、`history -c` 等）；高风险工具另受审批门控制 |
-| 文件系统越界 | `file_*` 与终端 cwd 被 jail 在 engagement workdir；符号链接逃逸被拒绝 |
-| 密钥泄漏到日志/报告 | 事件/轨迹/报告写出前 `util.redact`；`public_dict()` 遮蔽 API key 与 token |
+| 文件系统越界 | `file_*` 工具严格限制在 engagement workdir（拒绝穿越与符号链接逃逸）；终端仅限制启动 `cwd`，`local` 后端不提供 OS 级文件系统隔离（强隔离需用 `docker`） |
+| 密钥泄漏到日志/报告 | 事件/轨迹/报告写出前 `util.redact`；`public_dict()` 使用显式公开字段白名单并全量遮罩密钥；SSE 仅用请求头认证，敏感查询参数在服务端日志中脱敏 |
 | Web 控制台被远程滥用 | 默认只绑定 `127.0.0.1`；可选 Bearer token；建议反向代理 + TLS |
 | 预算失控/无限循环 | 时间、LLM 调用、token、工具调用、intent 总数、并发、专家深度全部受限 |
 | 进程残留 | `Engagement.close()` 先取消、再 join（10s 上限）；demo target 处理 SIGTERM |

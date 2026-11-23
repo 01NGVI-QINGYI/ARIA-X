@@ -184,7 +184,7 @@ python -m aria_x serve --host 127.0.0.1 --port 8787
   `ssh -L 8787:127.0.0.1:8787 user@host`；
 - 或放在带 TLS 的反向代理（Caddy/Nginx）之后，并设置 `ARIA_X_AUTH_TOKEN`；
 - ARIA-X **不自带 TLS**。直接在公网监听等于明文传输 token 与目标数据；
-- SSE 端点 `GET /api/projects/<id>/events` 支持 `?token=`（EventSource 不能设置请求头）；
+- SSE 端点 `GET /api/projects/<id>/events` 仅接受请求头认证（`Authorization: Bearer $ARIA_X_AUTH_TOKEN` 或 `X-ARIA-X-Token`），不再接受 `?token=` 查询参数；
 - health：`curl -H "Authorization: Bearer $ARIA_X_AUTH_TOKEN" http://127.0.0.1:8787/api/health`。
 
 ## 6. Docker
@@ -270,7 +270,7 @@ schema 不兼容，保留备份并查阅 release notes。
 | 预算是 `budget` 状态 | 正常收尾；调大 `budget.*` 或缩窄目标 |
 | 工具一直 scope 拒绝 | `python -m aria_x tools` 看 `scope_check`；确认 URL 主机/端口/前缀覆盖 |
 | Web 控制台 401 | 设置/携带 `Authorization: Bearer $ARIA_X_AUTH_TOKEN` |
-| SSE 不更新 | 反代需关闭 buffering；或用 `?token=` 直连 |
+| SSE 不更新 | 反代需关闭 buffering；或携带 `Authorization: Bearer $ARIA_X_AUTH_TOKEN` 直连 |
 | 运行卡住 | 查看 `/api/runs/<id>` 的 tasks 与 `data/events.jsonl`；`POST /api/runs/<id>/stop` |
 
 ## 9. 生产前检查清单

@@ -134,8 +134,8 @@ SQLite 表（`src/aria_x/store/schema.py`）：
 - `llm.scenario` 是相对 CWD 的路径，也接受内联 JSON；文件缺失抛 `LLMError`。
 - 并行运行时会并发消费同一队列，**需要确定性时把 `max_concurrency` 设为 1**。
 
-真实 provider 的密钥只从配置或环境变量读取；`AriaXConfig.public_dict()` 会遮蔽 API key 与
-server token；所有事件与报告在写出前经过 `util.redact`。
+真实 provider 的密钥只从配置或环境变量读取；`AriaXConfig.public_dict()` 使用显式公开字段白名单，遮蔽 API key 与
+server token 并剥离自定义请求头、沙箱环境变量与 URL 凭据；所有事件与报告在写出前经过 `util.redact`。
 
 ## 5. 工具执行边界
 
@@ -186,8 +186,7 @@ Agent loop
 
 `aria_x.server.create_server(config, engagement, bus, store)` 返回已绑定但未启动的
 `ThreadingHTTPServer`；`serve(config, ...)` 负责启动。默认 `127.0.0.1:8787`。
-若配置 `server.auth_token`（或 `ARIA_X_AUTH_TOKEN`），除 `/api/health` 外的 API 需要
-`Authorization: Bearer <token>`；SSE 因 EventSource 不能设置请求头，也接受 `?token=`。
+若配置 `server.auth_token`（或 `ARIA_X_AUTH_TOKEN`），除 `/api/health` 外的 API（含 SSE 事件流）均需通过 `Authorization: Bearer <token>` 或 `X-ARIA-X-Token` 请求头认证；控制台使用带认证头的流式 `fetch` 订阅 SSE，不再通过 `?token=` 查询串传递长期令牌。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

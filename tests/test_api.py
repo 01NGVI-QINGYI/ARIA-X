@@ -133,9 +133,13 @@ class ServerTestCase(unittest.TestCase):
             self.fail(f"expected JSON from {method} {path}, got {data[:200]!r}")
         return status, parsed
 
-    def open_stream(self, path: str) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    def open_stream(self, path: str, *, token: str | None = None,
+                    headers: dict[str, str] | None = None) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
         conn = http.client.HTTPConnection(self.host, self.port, timeout=8)
-        conn.request("GET", path)
+        req_headers = dict(headers or {})
+        if token:
+            req_headers["Authorization"] = f"Bearer {token}"
+        conn.request("GET", path, headers=req_headers)
         return conn, conn.getresponse()
 
     def read_sse_until(self, response: http.client.HTTPResponse, predicate, timeout: float = 6.0,
@@ -483,14 +487,301 @@ class ServerTestCase(unittest.TestCase):
         self.config.server.auth_token = "stream-token"
         status, _, _ = self.request("GET", f"/api/projects/{self.project.id}/events")
         self.assertEqual(status, 401)
+        # Legacy ?token= query parameter must be rejected.
+        status, _, _ = self.request("GET", f"/api/projects/{self.project.id}/events?token=stream-token")
+        self.assertEqual(status, 401)
+
         conn, response = self.open_stream(
-            f"/api/projects/{self.project.id}/events?token=stream-token")
+            f"/api/projects/{self.project.id}/events",
+            token="stream-token",
+        )
         try:
             self.assertEqual(response.status, 200)
             self.assertEqual(response.getheader("Content-Type"), "text/event-stream; charset=utf-8")
         finally:
             response.close()
             conn.close()
+
+        conn2, response2 = self.open_stream(
+            f"/api/projects/{self.project.id}/events",
+            headers={"X-ARIA-X-Token": "stream-token"},
+        )
+        try:
+            self.assertEqual(response2.status, 200)
+            self.assertEqual(response2.getheader("Content-Type"), "text/event-stream; charset=utf-8")
+        finally:
+            response2.close()
+            conn2.close()
+
+    def test_server_logs_redact_sensitive_query_params(self) -> None:
+        import logging
+        from unittest import mock
+
+        self.config.server.auth_token = "stream-token"
+        with self.assertLogs("aria_x.server", level=logging.DEBUG) as captured:
+            status, _, _ = self.request(
+                "GET",
+                f"/api/projects/{self.project.id}/events?replay=10&token=synth-access-tok-111&opaque_secret=synth-custom-q-222",
+            )
+            self.assertEqual(status, 401)
+
+            with mock.patch.object(
+                self.server.api,
+                "dispatch",
+                side_effect=RuntimeError("boom-secret-check"),
+            ):
+                status2, _, _ = self.request(
+                    "GET",
+                    f"/api/projects/{self.project.id}/events?token=synth-exc-tok-444",
+                    token="stream-token",
+                )
+                self.assertEqual(status2, 500)
+
+        joined = "\n".join(captured.output)
+        self.assertIn("replay=10", joined)
+        self.assertIn("[REDACTED]", joined)
+        for secret in ("synth-access-tok-111", "synth-custom-q-222", "synth-exc-tok-444"):
+            self.assertNotIn(secret, joined)
+
+    def test_web_fetch_sse_auth_replay_heartbeat_reconnect_and_switch(self) -> None:
+        import shutil
+        import subprocess
+
+        node = shutil.which("node") or "/opt/homebrew/bin/node"
+        if not Path(node).exists():
+            self.skipTest("node not installed")
+
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+const i18nCode = fs.readFileSync(process.argv[1], "utf8");
+const appCode = fs.readFileSync(process.argv[2], "utf8");
+
+const elements = {};
+function makeEl(id) {
+  return {
+    id, hidden: false, disabled: false, value: "", textContent: "",
+    className: "", children: [], style: {}, scrollTop: 0, scrollHeight: 100,
+    checked: true, dataset: {},
+    classList: {
+      _set: new Set(),
+      add(...xs) { xs.forEach(x => this._set.add(x)); },
+      remove(...xs) { xs.forEach(x => this._set.delete(x)); },
+      toggle(x, f) { if (f === undefined) { if (this._set.has(x)) this._set.delete(x); else this._set.add(x); } else if (f) this._set.add(x); else this._set.delete(x); },
+    },
+    setAttribute(k, v) { this[k] = v; },
+    removeAttribute(k) { delete this[k]; },
+    addEventListener() {},
+    querySelector() { return null; },
+    appendChild(c) { this.children.push(c); return c; },
+    replaceChildren(...cs) { this.children = cs; },
+  };
+}
+for (const id of [
+  "conn-pill", "conn-text", "sse-status", "timeline-pulse", "timeline-log",
+  "timeline-empty", "timeline-count", "timeline-autoscroll", "timeline-type",
+  "project-select", "overview-empty", "overview-content", "project-name",
+  "project-goal", "run-id", "run-state", "run-chip", "btn-start", "btn-stop",
+  "approval-list", "approval-count", "report-empty", "report-frame",
+  "report-meta", "report-open", "report-markdown", "graph-svg", "graph-empty",
+  "graph-count", "graph-detail", "graph-legend", "toasts",
+]) {
+  elements[id] = makeEl(id);
+}
+
+const fetchCalls = [];
+const timers = new Map();
+let nextTimerId = 1;
+const clearedTimers = [];
+
+function makeChunkReader(chunks) {
+  let idx = 0;
+  return {
+    async read() {
+      if (idx >= chunks.length) return { done: true, value: undefined };
+      const item = chunks[idx++];
+      if (item instanceof Error) throw item;
+      return { done: false, value: Buffer.from(item, "utf8") };
+    },
+    async cancel() {},
+  };
+}
+
+let streamBehavior = null;
+
+class FakeAbortController {
+  constructor() { this.signal = { aborted: false }; }
+  abort() { this.signal.aborted = true; }
+}
+
+const ctx = {
+  AbortController: FakeAbortController,
+  TextDecoder: class {
+    decode(buf) { return buf ? Buffer.from(buf).toString("utf8") : ""; }
+  },
+  document: {
+    documentElement: { lang: "en" },
+    title: "",
+    hidden: false,
+    getElementById: (id) => elements[id] || makeEl(id),
+    querySelectorAll: () => [],
+    createElement: (tag) => makeEl(tag),
+    createElementNS: (_ns, tag) => makeEl(tag),
+    addEventListener: () => {},
+  },
+  window: {
+    location: { hash: "#timeline" },
+    addEventListener: () => {},
+    setTimeout: (fn, ms) => { const id = nextTimerId++; timers.set(id, { fn, ms }); return id; },
+    clearTimeout: (id) => { if (id) { clearedTimers.push(id); timers.delete(id); } },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    history: { replaceState: () => {} },
+    scrollTo: () => {},
+  },
+  localStorage: { getItem: () => "", setItem: () => {}, removeItem: () => {} },
+  URL: { createObjectURL: () => "blob:0", revokeObjectURL() {} },
+  Blob: class {},
+  fetch: async (url, init) => {
+    fetchCalls.push({ url, init: init || {} });
+    return streamBehavior(url, init || {});
+  },
+  setTimeout,
+  clearTimeout,
+};
+Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+ctx.window.ARIA_X_I18N = undefined;
+vm.runInNewContext(i18nCode, ctx);
+const patched = appCode.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, connectSSE, disconnectSSE, selectProject, setLanguage };\n})();");
+vm.runInNewContext(patched, ctx);
+
+async function flush() {
+  for (let i = 0; i < 6; i += 1) await new Promise(r => setTimeout(r, 2));
+}
+
+(async () => {
+  const { state, connectSSE, disconnectSSE, selectProject, setLanguage } = ctx.__TEST__;
+  state.token = "synth-web-token";
+  state.projectId = "projA";
+
+  // 1. Chunked replay + heartbeat + retry + disconnect reconnect with Last-Event-ID + dedup
+  let attempt = 0;
+  streamBehavior = async (url, init) => {
+    attempt += 1;
+    assert(!url.includes("token="), "URL must never contain token: " + url);
+    assert(!url.includes("synth-web-token"), "URL must never contain secret: " + url);
+    assert.strictEqual(init.headers.Authorization, "Bearer synth-web-token");
+    if (attempt === 1) {
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => makeChunkReader([
+            "retry: 1200\n: connected\n\n",
+            "id: ev_1\nevent: log\ndata: {\"message\": \"first\"}\n\n: heart",
+            "beat\n\nid: ev_2\nevent: log\ndata: {\"message\": \"second\"}\n\n",
+          ]),
+        },
+      };
+    }
+    assert.strictEqual(init.headers["Last-Event-ID"], "ev_2");
+    return {
+      ok: true,
+      status: 200,
+      body: {
+        getReader: () => makeChunkReader([
+          // ev_2 replayed again -> must be deduplicated
+          "id: ev_2\nevent: log\ndata: {\"message\": \"second\"}\n\n",
+          "id: ev_3\nevent: log\ndata: {\"message\": \"third\"}\n\n",
+        ]),
+      },
+    };
+  };
+
+  connectSSE();
+  await flush();
+  assert.strictEqual(state.events.length, 2, "expected 2 initial events");
+  assert.strictEqual(state.sseRetryMs, 1200);
+  assert.strictEqual(state.sseLastEventId, "ev_2");
+  assert(state.sseReconnectTimer !== null, "expected reconnect timer scheduled");
+
+  // Trigger scheduled reconnect
+  const tid = state.sseReconnectTimer;
+  const tinfo = timers.get(tid);
+  assert(tinfo, "missing reconnect timer in timers map");
+  assert.strictEqual(tinfo.ms, 1200);
+  timers.delete(tid);
+  tinfo.fn();
+  await flush();
+  assert.strictEqual(state.events.length, 3, "expected ev_2 deduped and ev_3 appended");
+  assert.strictEqual(state.events[2].id, "ev_3");
+
+  // Clear reconnect timer scheduled after attempt 2
+  if (state.sseReconnectTimer) { timers.delete(state.sseReconnectTimer); state.sseReconnectTimer = null; }
+
+  // 2. Language switch must NOT issue fetch or abort/reconnect SSE
+  const callsBeforeLang = fetchCalls.length;
+  setLanguage("zh-CN");
+  setLanguage("ja");
+  setLanguage("en");
+  assert.strictEqual(fetchCalls.length, callsBeforeLang);
+
+  // 3. 401 Unauthorized must stop reconnecting
+  streamBehavior = async () => ({ ok: false, status: 401 });
+  connectSSE();
+  await flush();
+  assert.strictEqual(state.sseConnected, false);
+  assert.strictEqual(state.sseReconnectTimer, null, "must not reconnect on 401");
+
+  // 4. Switching project aborts old stream, clears pending timer, and connects new project
+  let releaseOld = null;
+  streamBehavior = async (url, init) => {
+    if (url.includes("projA")) {
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: () => new Promise((res) => { releaseOld = res; }),
+            cancel() {},
+          }),
+        },
+      };
+    }
+    if (url.includes("projB")) {
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          getReader: () => makeChunkReader(["id: b_1\nevent: log\ndata: {\"message\": \"fromB\"}\n\n"]),
+        },
+      };
+    }
+    return { ok: true, status: 200, text: async () => "{}", headers: new Map() };
+  };
+  connectSSE();
+  await flush();
+  const oldAbort = state.sseAbort;
+  await selectProject("projB");
+  await flush();
+  assert.strictEqual(oldAbort.signal.aborted, true, "old stream must be aborted on project switch");
+  if (releaseOld) releaseOld({ done: false, value: Buffer.from("id: stale_a\nevent: log\ndata: {\"message\": \"stale\"}\n\n") });
+  await flush();
+  assert(state.events.every(e => e.id !== "stale_a"), "stale projA event must be ignored");
+  assert(state.events.some(e => e.id === "b_1"), "projB event must arrive");
+
+  disconnectSSE();
+  console.log("WEB_FETCH_SSE_OK");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+        proc = subprocess.run([
+            node, "-e", script,
+            str(Path(__file__).resolve().parents[1] / "src" / "aria_x" / "web" / "i18n.js"),
+            str(Path(__file__).resolve().parents[1] / "src" / "aria_x" / "web" / "app.js"),
+        ], capture_output=True, text=True, timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("WEB_FETCH_SSE_OK", proc.stdout)
 
     # -- static console ----------------------------------------------------
 

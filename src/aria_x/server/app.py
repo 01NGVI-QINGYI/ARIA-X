@@ -18,17 +18,18 @@ import hmac
 import json
 import logging
 import mimetypes
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Mapping, Sequence
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlsplit, urlunsplit
 
 from .. import TAGLINE, __version__
 from ..config import AriaXConfig
 from ..errors import AriaXError
 from ..events import EventBus
 from ..store import Store
-from ..util import json_dumps
+from ..util import json_dumps, redact
 from .api import Api, RequestError, Response, StreamResponse, response_for_error
 
 logger = logging.getLogger("aria_x.server")
@@ -57,6 +58,44 @@ _CSP = (
     "img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-src 'self'; "
     "base-uri 'none'; form-action 'self'; object-src 'none'"
 )
+
+_SAFE_LOG_QUERY_KEYS = frozenset({"replay", "format", "project_id", "task_id", "limit"})
+_QUERY_IN_TEXT_RE = re.compile(r"\?([^\s\"'<>]+)")
+
+
+def _sanitize_query(raw_query: str) -> str:
+    if not raw_query:
+        return ""
+    parts: list[str] = []
+    for key, value in parse_qsl(raw_query, keep_blank_values=True):
+        safe_key = quote(key, safe="-._~")
+        if key.lower() in _SAFE_LOG_QUERY_KEYS:
+            parts.append(f"{safe_key}={quote(redact(value), safe='-._~')}")
+        else:
+            parts.append(f"{safe_key}=[REDACTED]")
+    return "&".join(parts)
+
+
+def _sanitize_request_target(raw_target: str) -> str:
+    text = str(raw_target or "")
+    if not text:
+        return ""
+    try:
+        parts = urlsplit(text)
+    except ValueError:
+        return redact(text)
+    netloc = parts.netloc
+    if "@" in netloc:
+        netloc = netloc.rsplit("@", 1)[1]
+    cleaned = urlunsplit((parts.scheme, netloc, parts.path, _sanitize_query(parts.query), ""))
+    return redact(cleaned)
+
+
+def _sanitize_log_text(text: str) -> str:
+    if not text:
+        return ""
+    masked = _QUERY_IN_TEXT_RE.sub(lambda m: f"?{_sanitize_query(m.group(1))}", str(text))
+    return redact(masked)
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +159,24 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
 
     # -- logging -----------------------------------------------------------
 
+    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+        if isinstance(code, int):
+            code_str = str(code)
+        else:
+            code_str = str(code)
+        if getattr(self, "command", None) and getattr(self, "request_version", None):
+            req_line = f"{self.command} {_sanitize_request_target(self.path)} {self.request_version}"
+        else:
+            req_line = _sanitize_log_text(getattr(self, "requestline", ""))
+        self.log_message('"%s" %s %s', req_line, code_str, str(size))
+
     def log_message(self, fmt: str, *args: Any) -> None:
-        logger.debug("%s - %s", self.address_string(), fmt % args)
+        msg = fmt % args if args else str(fmt)
+        logger.debug("%s - %s", self.address_string(), _sanitize_log_text(msg))
 
     def log_error(self, fmt: str, *args: Any) -> None:
-        logger.debug("%s - %s", self.address_string(), fmt % args)
+        msg = fmt % args if args else str(fmt)
+        logger.debug("%s - %s", self.address_string(), _sanitize_log_text(msg))
 
     # -- core dispatch -----------------------------------------------------
 
@@ -160,7 +212,7 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             return
         except Exception:  # pragma: no cover - defensive: never leak tracebacks
-            logger.exception("unhandled server error for %s %s", method, self.path)
+            logger.exception("unhandled server error for %s %s", method, _sanitize_request_target(self.path))
             try:
                 self._respond(Response.error("internal_error", "internal server error", 500))
             except Exception:
@@ -231,11 +283,6 @@ class AriaXRequestHandler(BaseHTTPRequestHandler):
         supplied = self.headers.get("X-ARIA-X-Token", "") or ""
         if supplied and hmac.compare_digest(supplied, token):
             return True
-        # EventSource cannot set headers, so the SSE route also accepts ?token=.
-        if normalised.endswith("/events"):
-            candidate = (query.get("token") or [""])[0]
-            if candidate and hmac.compare_digest(str(candidate), token):
-                return True
         return False
 
     # -- body --------------------------------------------------------------

@@ -171,7 +171,7 @@ All state-changing tools emit `Events` and audit. `http_request`/`port_scan`/`dn
 
 ## 5. HTTP API (server-dev)
 
-Bind `127.0.0.1` by default. Optional Bearer auth via `config.server.auth_token`.
+Bind `127.0.0.1` by default. Optional Bearer auth (`Authorization: Bearer <token>` / `X-ARIA-X-Token`, including SSE) via `config.server.auth_token`.
 Static: `GET /` → `web/index.html`, `GET /static/*`.
 
 ```

@@ -18,11 +18,12 @@ change, but persisted schema changes will include a migration note.
   with `Authorization: Bearer` and `Last-Event-ID`.
 - **`AriaXConfig.save()` is now a non-reloadable redacted export (`save_private()` added)**:
   `AriaXConfig.save()` now delegates to `AriaXConfig.export_public()` and writes a
-  shareable `_redacted_export: true` JSON snapshot (`.json` suffix required) that
-  `AriaXConfig.from_dict()` and `AriaXConfig.load()` reject with `ConfigError` (literal
-  `"***"` placeholders are also rejected as runtime credentials). Callers needing
-  reloadable local persistence must explicitly call `AriaXConfig.save_private("<path>.json")`
-  (`.json` suffix required; atomic write with owner-only `0o600` permissions).
+  shareable `_redacted_export: true` JSON snapshot to a new `.json` file (`open("x")`,
+  refusing to overwrite existing files) that `AriaXConfig.from_dict()` and
+  `AriaXConfig.load()` reject with `ConfigError` (literal `"***"` placeholders are also
+  rejected as runtime credentials). Callers needing reloadable local persistence must
+  explicitly call `AriaXConfig.save_private("<path>.json")` (`.json` suffix required;
+  atomic write with owner-only `0o600` permissions).
 
 ### Security
 
@@ -36,10 +37,11 @@ change, but persisted schema changes will include a migration note.
   any unknown/custom attributes without mutating live config.
 - **Separated shareable redacted export from reloadable private config persistence**:
   Added `AriaXConfig.export_public()` and `AriaXConfig.save_private()`, both requiring a
-  `.json` suffix before creating directories or touching the target path; `save_private()`
-  preserves `extra_headers`, `extra_body`, `scenario`, `sandbox.env`,
-  `sandbox.extra_args`, `scope.notes`, `safety.note`, and credentials via atomic write
-  with `0o600` permissions.
+  `.json` suffix before creating directories or touching the target path; `export_public()`
+  and `save()` also use exclusive creation (`open("x")`) and refuse to overwrite existing
+  files, while `save_private()` preserves `extra_headers`, `extra_body`, `scenario`,
+  `sandbox.env`, `sandbox.extra_args`, `scope.notes`, `safety.note`, and credentials via
+  atomic write with `0o600` permissions.
 - **HTTP access, error, and exception log sanitization**:
   Normalized logged request paths in `AriaXRequestHandler` using explicit route templates
   (e.g., `/api/projects/{project_id}/events`, `/static/{asset}`) and hashed digests for

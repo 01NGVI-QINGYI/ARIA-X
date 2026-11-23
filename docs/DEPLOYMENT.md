@@ -252,7 +252,7 @@ sqlite3 data/aria-x.db ".backup 'aria-x-backup.db'" # 物理备份（需要 sqli
   `data/aria-x.db` 本身；
 - 直接把备份的 `aria-x.db`/`runs/` 放回原位置，然后 `aria-x projects` 验证。
 
-升级：ARIA-X 处于 v0.1，schema 可能变化。升级前备份 `data/` 与 `runs/`；若启动时报
+升级：ARIA-X 处于 0.x（pre-1.0），schema 可能变化。升级前备份 `data/` 与 `runs/`；若启动时报
 schema 不兼容，保留备份并查阅 release notes。
 
 ## 8. 排障

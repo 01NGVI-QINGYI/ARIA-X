@@ -1,4 +1,4 @@
-# ARIA-X — Internal Build Contracts (v0.1)
+# ARIA-X — Internal Build Contracts
 
 This file is the hand-off contract for parallel development. Read it fully before writing code.
 

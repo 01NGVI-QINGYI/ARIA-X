@@ -14,7 +14,8 @@
 # traffic still needs network access; see docker/kali-sandbox.md before enabling
 # a bridge network for an engagement.
 
-FROM python:3.12-slim
+# python:3.12.16-slim multi-arch OCI index (amd64, arm64/v8, arm/v7, arm/v5, 386, ppc64le, riscv64, s390x)
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 LABEL org.opencontainers.image.title="ARIA-X" \
       org.opencontainers.image.description="Autonomous Reasoning & Investigation Agent, eXtended — authorized security research" \

@@ -78,6 +78,7 @@
     sseAbort: null,
     sseReconnectTimer: null,
     sseRetryMs: 3000,
+    sseFailureCount: 0,
     sseLastEventId: "",
     seenEventIds: new Set(),
     pollTimer: null,
@@ -1404,8 +1405,9 @@
     $("timeline-pulse").classList.toggle("on", state.sseConnected);
   }
 
-  function disconnectSSE() {
+  function disconnectSSE({ resetBackoff = true } = {}) {
     state.sseSeq += 1;
+    if (resetBackoff) state.sseFailureCount = 0;
     if (state.sseReconnectTimer) {
       window.clearTimeout(state.sseReconnectTimer);
       state.sseReconnectTimer = null;
@@ -1417,14 +1419,21 @@
     setSseStatus(false);
   }
 
-  function scheduleSseReconnect(streamSeq, projectId) {
+  function scheduleSseReconnect(streamSeq, projectId, { isFailure = false } = {}) {
     if (streamSeq !== state.sseSeq || !projectId || state.projectId !== projectId) return;
     if (state.sseReconnectTimer) window.clearTimeout(state.sseReconnectTimer);
-    const delay = Math.max(250, Math.min(30000, Number(state.sseRetryMs) || 3000));
+    const base = Math.max(250, Math.min(30000, Number(state.sseRetryMs) || 3000));
+    let delay = base;
+    if (isFailure) {
+      state.sseFailureCount = Math.min((Number(state.sseFailureCount) || 0) + 1, 10);
+      delay = Math.min(30000, base * (2 ** Math.min(state.sseFailureCount - 1, 6)));
+    } else {
+      state.sseFailureCount = 0;
+    }
     state.sseReconnectTimer = window.setTimeout(() => {
       state.sseReconnectTimer = null;
       if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
-      connectSSE();
+      connectSSE({ preserveBackoff: true });
     }, delay);
   }
 
@@ -1458,8 +1467,8 @@
     });
   }
 
-  function connectSSE() {
-    disconnectSSE();
+  function connectSSE({ preserveBackoff = false } = {}) {
+    disconnectSSE({ resetBackoff: !preserveBackoff });
     if (!state.projectId) return;
     const projectId = state.projectId;
     const streamSeq = state.sseSeq;
@@ -1479,12 +1488,14 @@
         if (!response || !response.ok) {
           setSseStatus(false);
           if (response && response.status === 401) {
+            state.sseFailureCount = 0;
             noteAuthFailure();
             return;
           }
-          scheduleSseReconnect(streamSeq, projectId);
+          scheduleSseReconnect(streamSeq, projectId, { isFailure: true });
           return;
         }
+        state.sseFailureCount = 0;
         setSseStatus(true);
         const body = response.body;
         if (!body || typeof body.getReader !== "function") {
@@ -1496,7 +1507,7 @@
             if (frame) dispatchSseFrame(frame, streamSeq, projectId);
           }
           setSseStatus(false);
-          scheduleSseReconnect(streamSeq, projectId);
+          scheduleSseReconnect(streamSeq, projectId, { isFailure: false });
           return;
         }
         const reader = body.getReader();
@@ -1531,13 +1542,13 @@
         // Any remaining unterminated fragment in `buffer` at EOF is intentionally discarded.
         if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
         setSseStatus(false);
-        scheduleSseReconnect(streamSeq, projectId);
+        scheduleSseReconnect(streamSeq, projectId, { isFailure: false });
       } catch (error) {
         if (controller && controller.signal && controller.signal.aborted) return;
         if (error && error.name === "AbortError") return;
         if (streamSeq !== state.sseSeq || state.projectId !== projectId) return;
         setSseStatus(false);
-        scheduleSseReconnect(streamSeq, projectId);
+        scheduleSseReconnect(streamSeq, projectId, { isFailure: true });
       }
     })();
   }

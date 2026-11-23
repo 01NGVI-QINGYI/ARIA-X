@@ -1154,6 +1154,186 @@ async function flush() {
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         self.assertIn("WEB_SSE_EOF_UTF8_OK", proc.stdout)
 
+    def test_web_sse_bounded_backoff_and_cancellation(self) -> None:
+        import shutil
+        import subprocess
+
+        node = shutil.which("node") or "/opt/homebrew/bin/node"
+        if not Path(node).exists():
+            self.skipTest("node not installed")
+
+        script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const assert = require("assert");
+const i18nCode = fs.readFileSync(process.argv[1], "utf8");
+const appCode = fs.readFileSync(process.argv[2], "utf8");
+
+const elements = {};
+function makeEl(id) {
+  return {
+    id, hidden: false, disabled: false, value: "", textContent: "",
+    className: "", children: [], style: {}, scrollTop: 0, scrollHeight: 100,
+    checked: true, dataset: {},
+    classList: {
+      _set: new Set(),
+      add(...xs) { xs.forEach(x => this._set.add(x)); },
+      remove(...xs) { xs.forEach(x => this._set.delete(x)); },
+      toggle(x, f) { if (f === undefined) { if (this._set.has(x)) this._set.delete(x); else this._set.add(x); } else if (f) this._set.add(x); else this._set.delete(x); },
+    },
+    setAttribute(k, v) { this[k] = v; },
+    removeAttribute(k) { delete this[k]; },
+    addEventListener() {},
+    querySelector() { return null; },
+    appendChild(c) { this.children.push(c); return c; },
+    replaceChildren(...cs) { this.children = cs; },
+  };
+}
+for (const id of [
+  "conn-pill", "conn-text", "sse-status", "timeline-pulse", "timeline-log",
+  "timeline-empty", "timeline-count", "timeline-autoscroll", "timeline-type",
+  "project-select", "overview-empty", "overview-content", "project-name",
+  "project-goal", "run-id", "run-state", "run-chip", "btn-start", "btn-stop",
+  "approval-list", "approval-count", "report-empty", "report-frame",
+  "report-meta", "report-open", "report-markdown", "graph-svg", "graph-empty",
+  "graph-count", "graph-detail", "graph-legend", "toasts",
+]) {
+  elements[id] = makeEl(id);
+}
+
+const timers = new Map();
+let nextTimerId = 1;
+const clearedTimers = [];
+let streamBehavior = null;
+
+class FakeAbortController {
+  constructor() { this.signal = { aborted: false }; }
+  abort() { this.signal.aborted = true; }
+}
+
+const ctx = {
+  AbortController: FakeAbortController,
+  TextDecoder: globalThis.TextDecoder,
+  document: {
+    documentElement: { lang: "en" },
+    title: "",
+    hidden: false,
+    getElementById: (id) => elements[id] || makeEl(id),
+    querySelectorAll: () => [],
+    createElement: (tag) => makeEl(tag),
+    createElementNS: (_ns, tag) => makeEl(tag),
+    addEventListener: () => {},
+  },
+  window: {
+    location: { hash: "#timeline" },
+    addEventListener: () => {},
+    setTimeout: (fn, ms) => { const id = nextTimerId++; timers.set(id, { fn, ms }); return id; },
+    clearTimeout: (id) => { if (id) { clearedTimers.push(id); timers.delete(id); } },
+    setInterval: () => 1,
+    clearInterval: () => {},
+    history: { replaceState: () => {} },
+    scrollTo: () => {},
+  },
+  localStorage: { getItem: () => "", setItem: () => {}, removeItem: () => {} },
+  URL: { createObjectURL: () => "blob:0", revokeObjectURL() {} },
+  Blob: class {},
+  fetch: async (url, init) => streamBehavior(url, init || {}),
+  setTimeout,
+  clearTimeout,
+};
+Object.assign(ctx, { console, encodeURIComponent, decodeURIComponent, Set, Map, Array, Object, String, Number, Boolean, Date, Math, JSON, Error, Promise });
+ctx.window.ARIA_X_I18N = undefined;
+vm.runInNewContext(i18nCode, ctx);
+const patched = appCode.replace(/\}\)\(\);\s*$/, "  globalThis.__TEST__ = { state, connectSSE, disconnectSSE, selectProject };\n})();");
+vm.runInNewContext(patched, ctx);
+
+async function flush() {
+  for (let i = 0; i < 6; i += 1) await new Promise(r => setTimeout(r, 2));
+}
+
+(async () => {
+  const { state, connectSSE, disconnectSSE, selectProject } = ctx.__TEST__;
+  state.token = "synth-tok";
+  state.projectId = "projBackoff";
+  state.sseRetryMs = 1000;
+
+  // 1. Consecutive 503 + network errors double delay up to 30000ms cap
+  let attempt = 0;
+  streamBehavior = async () => {
+    attempt += 1;
+    if (attempt <= 4) return { ok: false, status: 503 };
+    if (attempt <= 7) throw new Error("network down");
+    if (attempt === 8) {
+      return {
+        ok: true,
+        status: 200,
+        body: { getReader: () => ({ async read() { return { done: true, value: undefined }; }, async cancel() {} }) },
+      };
+    }
+    return { ok: false, status: 401 };
+  };
+
+  const delays = [];
+  connectSSE();
+  await flush();
+  for (let i = 0; i < 7; i += 1) {
+    const tid = state.sseReconnectTimer;
+    assert(tid !== null, "expected reconnect timer on attempt " + (i + 1));
+    const info = timers.get(tid);
+    delays.push(info.ms);
+    timers.delete(tid);
+    info.fn();
+    await flush();
+  }
+  assert.deepStrictEqual(delays, [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
+
+  // Attempt 8 succeeded (200 OK EOF) -> sseFailureCount reset to 0 and clean EOF uses base delay 1000
+  assert.strictEqual(state.sseFailureCount, 0);
+  const cleanTid = state.sseReconnectTimer;
+  assert.strictEqual(timers.get(cleanTid).ms, 1000);
+  const cleanInfo = timers.get(cleanTid);
+  timers.delete(cleanTid);
+  cleanInfo.fn();
+  await flush();
+
+  // Attempt 9 returned 401 -> stops reconnecting and resets failure count
+  assert.strictEqual(state.sseReconnectTimer, null, "401 must cancel reconnect");
+  assert.strictEqual(state.sseFailureCount, 0);
+
+  // 2. Switching project while backoff timer is pending cancels timer and resets failure count
+  streamBehavior = async (url) => {
+    if (url.includes("projBackoff")) return { ok: false, status: 502 };
+    if (url.includes("projNext")) {
+      return {
+        ok: true,
+        status: 200,
+        body: { getReader: () => ({ async read() { return { done: true, value: undefined }; }, async cancel() {} }) },
+      };
+    }
+    return { ok: true, status: 200, text: async () => "{}", headers: new Map() };
+  };
+  connectSSE();
+  await flush();
+  assert.strictEqual(state.sseFailureCount, 1);
+  const pendingTid = state.sseReconnectTimer;
+  assert(pendingTid !== null);
+  await selectProject("projNext");
+  await flush();
+  assert(clearedTimers.includes(pendingTid), "project switch must cancel pending backoff timer");
+  assert.strictEqual(state.sseFailureCount, 0);
+
+  disconnectSSE();
+  console.log("WEB_SSE_BACKOFF_OK");
+})().catch((err) => { console.error(err); process.exit(1); });
+"""
+        proc = subprocess.run([
+            node, "-e", script,
+            str(Path(__file__).resolve().parents[1] / "src" / "aria_x" / "web" / "i18n.js"),
+            str(Path(__file__).resolve().parents[1] / "src" / "aria_x" / "web" / "app.js"),
+        ], capture_output=True, text=True, timeout=15)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        self.assertIn("WEB_SSE_BACKOFF_OK", proc.stdout)
+
     # -- static console ----------------------------------------------------
 
     def test_static_console_assets_and_traversal_protection(self) -> None:

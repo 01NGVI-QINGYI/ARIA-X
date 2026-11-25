@@ -50,8 +50,6 @@
 
 ### 紧凑谱系与融合图
 
-<div align="center">
-
 ```mermaid
 flowchart LR
     subgraph UP["上游思想来源"]
@@ -66,7 +64,7 @@ flowchart LR
         EX["受控执行层<br/>agents · tools · llm<br/>27 工具与沙箱<br/>Scope 与 DNS 钉扎"]
     end
 
-    OUT(["可复现输出<br/>report · server · web<br/>证据链报告与审计<br/>本地 SSE 控制台"])
+    OUT["可复现输出<br/>report · server · web<br/>证据链报告与审计<br/>本地 SSE 控制台"]
 
     C --> ST
     C --> OR
@@ -77,8 +75,6 @@ flowchart LR
     OR --> OUT
     EX --> OUT
 ```
-
-</div>
 
 ### 各层能力融合对照
 
@@ -132,16 +128,14 @@ ARIA-X 将上下文感知的智能体推理与结构化状态管理、工具执�
 
 单次验证运行的主循环（详见 [src/aria_x/engine/orchestrator.py](src/aria_x/engine/orchestrator.py)）：
 
-<div align="center">
-
 ```mermaid
 flowchart LR
-    BOOT["1. bootstrap<br/>初始基线探测"]
-    RSN["2. reason<br/>Planner 生成意图"]
-    DSP["3. dispatch<br/>并发派发任务"]
-    WRK["4. worker<br/>受控工具验证"]
-    PST["5. persist<br/>状态与证据落库"]
-    RPT(["6. report<br/>生成证据链报告"])
+    BOOT["bootstrap<br/>初始基线探测"]
+    RSN["reason<br/>Planner 生成意图"]
+    DSP["dispatch<br/>并发派发任务"]
+    WRK["worker<br/>受控工具验证"]
+    PST["persist<br/>状态与证据落库"]
+    RPT["report<br/>生成证据链报告"]
 
     BOOT --> RSN
     RSN --> DSP
@@ -501,7 +495,7 @@ ARIA-X 将 **ARTEX、Cairn 与 PentAGI** 的架构思想整合到独立的 Pytho
 本项目的**架构收敛、代码实现、单元测试、离线验证脚本及中英文文档**均在 **DeepSeek Harness（DeepSeek-V4.1-Flash-1017）** 的辅助下完成：
 - 将三套异构技术栈（Go / Python / Go+TS）的核心概念抽象为统一的 Python 状态机与 SQLite 数据模型；
 - 实现并重构编排引擎、工具注册表、LLM 路由、HTTP API 与本地 Web 控制台；
-- 编写 217 项单元测试、离线端到端演示（`./aria-x demo`）与自检脚本。
+- 编写 354 项单元测试、离线端到端演示（`./aria-x demo`）与自检脚本。
 
 架构取舍、安全边界与最终代码均由项目维护者审阅把关。
 

@@ -20,7 +20,7 @@ change, but persisted schema changes will include a migration note.
   resolved later (a late resolution would bypass the deny/private/public checks).
   `Scope` derives the address each decision approves (a declared CIDR wins over the
   first A record) and every request binds that address locally, so a concurrent
-authorization for the same host cannot move a connection. HTTP requests route
+  authorization for the same host cannot move a connection. HTTP requests route
   lookups through a thread-local resolver pin, closing the rebinding window
   between check and connect. TLS SNI and the `Host` header keep the hostname.
 - **Mass docker teardown blocked**: `docker rm -f $(docker ps -aq)`,
@@ -38,7 +38,8 @@ authorization for the same host cannot move a connection. HTTP requests route
   findings as a Mermaid flowchart in `report.md` and an inline SVG in
   `report.html` (no JavaScript, no CDN), colour-coded by severity and localized.
 - **Resume**: `aria-x run --resume [RUN_ID]` (or `Engagement.resume()`) re-enters
-  a run left in `running` or `failed`. The run keeps its id, bootstrap is skipped
+  a run left in `running`, `failed`, `interrupted` or `budget`; a run the operator
+  cancelled needs its explicit id. The run keeps its id, bootstrap is skipped
   because its nodes exist, and traces/usage stay in one place.
 - **Streaming model output**: OpenAI and Anthropic providers stream plain-text
   responses; the console shows a live character count on a TTY. Deltas are emitted
@@ -57,12 +58,12 @@ authorization for the same host cannot move a connection. HTTP requests route
 - Shell host extraction handles chained commands, wrappers, positional hosts and
   `--host=`/`-hHOST` forms, and no longer treats local file names as targets.
 - Resume carries recorded usage into the budget, reopens abandoned `active`
-  intents, clears `ended_at`, validates run/project ownership, and accepts
-  `budget`/`cancelled` runs.
+  intents, clears `ended_at`, validates run/project ownership, restores the
+  persisted time and intent allowance, and takes no-argument selection from the
+  involuntary stops only.
 - DNS pinning covers redirect hops and `tls_probe`/`port_scan`, binds every
   request to its own decision's address, and refuses to connect when
   authorization produced no address at all.
-
 - Streaming raises a retryable error on truncated/non-SSE responses; tool-free
   calls stream, tool-carrying calls do not.
 - Docker teardown rules cover backticks, `xargs`, `container/image` subcommands

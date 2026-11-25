@@ -69,3 +69,59 @@ class ResumeTests(unittest.TestCase):
         self.engagement.resume(run.id)
         facts = [n for n in self.store.list_nodes(self.project.id) if n.kind == "fact"]
         self.assertTrue(any(n.title == "partial fact" for n in facts))
+
+class ResumeBudgetAndStateTests(unittest.TestCase):
+    """Resume must keep spend, unstick abandoned work and validate ownership."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AriaXConfig(data_dir=str(self.tmp / "data"), runs_dir=str(self.tmp / "runs"))
+        self.cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.1"],
+                                     allow_loopback=True, max_rps=100)
+        self.cfg.llm = LLMConfig(provider="mock")
+        self.cfg.sandbox = SandboxConfig(backend="local")
+        self.cfg.safety = SafetyConfig(approval="auto")
+        self.store = Store(":memory:")
+        self.bus = EventBus()
+        self.engagement = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.project = self.engagement.create_project("resume", "prove it")
+        self.other = self.engagement.create_project("other", "other goal")
+
+    def tearDown(self) -> None:
+        self.engagement.close()
+        self.store.close()
+
+    def test_usage_is_carried_into_the_budget(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="running"))
+        self.store.update_run(run.id, usage={"llm_calls": 9, "tool_calls": 7,
+                                             "prompt_tokens": 1000, "completion_tokens": 200})
+        self.engagement.resume(run.id)
+        usage = self.store.get_run(run.id).usage
+        self.assertGreaterEqual(usage.get("tool_calls", 0), 7, "original tool calls must not be lost")
+        self.assertGreaterEqual(usage.get("llm_calls", 0), 9)
+
+    def test_active_intents_are_reopened(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="running"))
+        node = Node(id=new_id("n"), project_id=self.project.id, kind="intent",
+                    title="stuck intent", status="active")
+        self.store.add_node(node)
+        self.engagement.resume(run.id)
+        # The stuck intent must be picked up again, never left as 'active'.
+        self.assertNotEqual(self.store.get_node(node.id).status, "active")
+
+    def test_budget_and_cancelled_runs_can_resume(self) -> None:
+        for status in ("budget", "cancelled"):
+            run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status=status))
+            result = self.engagement.resume(run.id)
+            self.assertEqual(result.run_id, run.id)
+
+    def test_mismatched_project_id_is_rejected(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="running"))
+        with self.assertRaises(ConfigError):
+            self.engagement.resume(run.id, project_id=self.other.id)
+
+    def test_ended_at_is_cleared_on_resume(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="failed"))
+        self.store.update_run(run.id, ended_at="2026-11-25T00:00:00Z")
+        self.engagement.resume(run.id)
+        self.assertNotEqual(self.store.get_run(run.id).ended_at, "2026-11-25T00:00:00Z")

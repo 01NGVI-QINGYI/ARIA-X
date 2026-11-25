@@ -187,6 +187,8 @@ class Orchestrator:
             raise ConfigError("refusing to start: project scope.authorized is false")
 
         self.budget = Budget(self.config.budget)
+        if resume:
+            self._restore_progress(run)
         self.router = ModelRouter(self.config, budget=self.budget, events=self.events,
                                   project_id=project.id, run_id=run.id,
                                   provider=self.provider)
@@ -237,6 +239,42 @@ class Orchestrator:
             "bootstrap": bool(self.config.engine.bootstrap),
             "scope": scope_note(project_scope or self._scope_dict()),
         })
+
+    def _restore_progress(self, run: Run) -> None:
+        """Carry persisted usage into the budget and unstick abandoned work.
+
+        A crashed process leaves ``status='active'`` intents that the scheduler
+        will never pick up again and ``status='running'`` tasks that look live.
+        Both are reset here, and the original usage is restored so the budget
+        keeps counting what was already spent.
+        """
+        usage = dict(getattr(run, "usage", None) or {})
+        if usage and self.budget is not None and self.budget.usage is not None:
+            self.budget.usage.merge(usage)
+        project_id = getattr(self.project, "id", "")
+        try:
+            existing = self.store.list_nodes(project_id)
+        except Exception:
+            existing = []
+        self._intents_created = len([n for n in existing if getattr(n, "kind", "") == "intent"])
+        for node in existing:
+            if getattr(node, "kind", "") != "intent":
+                continue
+            if getattr(node, "status", "") in {"active", "in_progress"}:
+                try:
+                    self.store.update_node(node.id, status="open")
+                except Exception:
+                    pass
+        try:
+            for task in self.store.list_tasks(run.id):
+                if getattr(task, "status", "") in {"running", "active"}:
+                    try:
+                        self.store.update_task(task.id, status="interrupted",
+                                               error="interrupted by process restart")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _effective_scope(self, project_scope: Mapping[str, Any]) -> ScopeConfig:
         """Config scope is authoritative; project scope may only narrow it.

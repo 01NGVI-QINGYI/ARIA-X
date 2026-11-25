@@ -61,6 +61,9 @@ class EngagementResult:
         }
 
 
+_RESUMABLE_STATUSES = frozenset({"running", "failed", "interrupted", "budget", "cancelled"})
+
+
 @dataclass(slots=True)
 class _RunHandle:
     run_id: str
@@ -174,14 +177,19 @@ class Engagement:
         run = self.store.get_run(run_id) if run_id else self.store.latest_resumable_run(project_id)
         if run is None:
             raise NotFound(f"no resumable run for {run_id or project_id or 'any project'}")
-        if run.status not in {"running", "failed"}:
-            raise ConfigError(f"run {run.id} is {run.status!r}; only running/failed runs can resume")
+        if project_id and run.project_id != project_id:
+            raise ConfigError(
+                f"run {run.id} belongs to project {run.project_id}, not {project_id}")
+        if run.status not in _RESUMABLE_STATUSES:
+            raise ConfigError(
+                f"run {run.id} is {run.status!r}; resumable states are "
+                f"{', '.join(sorted(_RESUMABLE_STATUSES))}")
         project = self.store.get_project(run.project_id)
         if project is None:
             raise NotFound(f"project not found: {run.project_id}")
         self._assert_authorized(project)
         self._assert_no_active_run(project.id)
-        self.store.update_run(run.id, status="running", error="", finished_at=None)
+        self.store.update_run(run.id, status="running", error="", ended_at="")
         run = self.store.get_run(run.id)
         handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
         with self._lock:

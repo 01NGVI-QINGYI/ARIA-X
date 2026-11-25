@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import http.server
 import socket
 import tempfile
@@ -324,3 +325,57 @@ class PerRequestPinningTests(unittest.TestCase):
         self.assertEqual(second_approved, "127.0.0.2")
         # The first request must keep its own approved address, not the shared pin.
         self.assertNotEqual(first_approved, s.pinned_addresses().get("race.test"))
+
+
+class RequestScopedPinMapTests(unittest.TestCase):
+    """The connection map comes from this decision, not from the shared cache."""
+
+    def _ctx(self, scope, cfg, tmp):
+        store = Store(":memory:")
+        bus = EventBus()
+        ctx = ToolContext(
+            project=SimpleNamespace(id="p"), run_id="r", workdir=tmp, config=cfg, scope=scope,
+            sandbox=sandbox_mod.build_sandbox(cfg.sandbox, tmp), store=store, events=bus,
+            agent="worker", role="worker", task_id=None,
+        )
+        self.addCleanup(store.close)
+        return ctx
+
+    def test_pin_map_ignores_a_poisoned_shared_cache(self) -> None:
+        tmp = Path(tempfile.mkdtemp())
+        cfg = AriaXConfig(data_dir=str(tmp), runs_dir=str(tmp / "runs"))
+        cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.3/32"],
+                                allow_private=True, allow_loopback=True, max_rps=100)
+        cfg.sandbox = SandboxConfig(backend="local")
+        cfg.safety = SafetyConfig(approval="auto")
+        scope = Scope(cfg.scope, allow_public_targets=True)
+        scope._pinned["race.test"] = "127.0.0.1"      # another request's address
+
+        captured: dict[str, dict[str, str]] = {}
+
+        @contextlib.contextmanager
+        def recorder(pins):
+            captured["map"] = dict(pins() if callable(pins) else (pins or {}))
+            yield
+
+        with mock.patch("aria_x.tools.net.pin_resolution", recorder), \
+                mock.patch("aria_x.tools.scope._resolve",
+                           return_value=["127.0.0.1", "127.0.0.3"]):
+            net_tool.http_request(
+                self._ctx(scope, cfg, tmp),
+                {"url": "http://race.test:9/never", "method": "GET"},
+            )
+        self.assertEqual(captured["map"].get("race.test"), "127.0.0.3",
+                         "the request must pin its own approved address, not the shared one")
+
+    def test_path_mismatched_url_rule_falls_back_to_cidr_address(self) -> None:
+        s = Scope(ScopeConfig(authorized=True,
+                              targets=["https://app.example.test/public", "10.0.0.2/32"],
+                              allow_private=True, allow_loopback=True, max_rps=100),
+                  allow_public_targets=True)
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["10.0.0.99", "10.0.0.2"]):
+            decision = s.authorize_url("https://app.example.test/admin")
+        self.assertTrue(decision.allowed, "authorized by the CIDR rule")
+        approved = s.approved_address(decision.host, decision.port, decision.ips)
+        self.assertEqual(approved, "10.0.0.2",
+                         "a path-mismatched URL rule must not drag the pin outside the CIDR")

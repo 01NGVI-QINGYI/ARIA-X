@@ -1289,7 +1289,7 @@ class Orchestrator:
 
 def _load_write_report() -> Callable[..., Any] | None:
     try:
-        from ..report.render import write_report
+        from ..report.render import attack_graph_svg, write_report
         return write_report
     except Exception:
         return None
@@ -1310,7 +1310,9 @@ def _fallback_report(run_dir: Path, export: Mapping[str, Any], meta: Mapping[str
     json_path = run_dir / "report.json"
     markdown_path.write_text(markdown, encoding="utf-8")
     title = f"ARIA-X Engagement Report — {meta.get('project_name') or meta.get('project_id') or 'engagement'}"
-    html_path.write_text(_markdown_to_html(markdown, title), encoding="utf-8")
+    from ..report.render import attack_graph_svg
+    graph_svg = attack_graph_svg(export)
+    html_path.write_text(_markdown_to_html(markdown, title, graph_svg=graph_svg), encoding="utf-8")
     json_path.write_text(json_dumps(export, indent=2), encoding="utf-8")
     return {"markdown": str(markdown_path), "html": str(html_path), "json": str(json_path)}
 
@@ -1381,12 +1383,26 @@ def _fallback_markdown(export: Mapping[str, Any], meta: Mapping[str, Any]) -> st
     return "\n".join(lines)
 
 
-def _markdown_to_html(markdown: str, title: str) -> str:
+def _markdown_to_html(markdown: str, title: str, *, graph_svg: str = "") -> str:
     """Tiny, dependency-free Markdown subset renderer for the fallback report."""
     body: list[str] = []
     in_list = False
+    in_fence = False
+    fence_lang = ""
     for raw in markdown.splitlines():
         line = raw.rstrip()
+        if line.strip().startswith("```"):
+            if not in_fence:
+                in_fence = True
+                fence_lang = line.strip().lstrip("`").strip()
+                continue
+            if fence_lang == "mermaid" and graph_svg:
+                body.append(f'<figure class="attack-graph">{graph_svg}</figure>')
+            in_fence = False
+            fence_lang = ""
+            continue
+        if in_fence:
+            continue
         if line.startswith("### "):
             if in_list:
                 body.append("</ul>")

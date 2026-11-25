@@ -17,14 +17,21 @@ Threading model
 from __future__ import annotations
 
 import copy
+import contextlib
 import threading
+from pathlib import Path
+
+try:  # POSIX only; the project targets macOS and Linux.
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows falls back to no cross-process lock
+    _fcntl = None  # type: ignore[assignment]
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import AriaXConfig, ScopeConfig
-from ..errors import ConfigError
+from ..errors import ConfigError, NotFound
 from ..events import EventBus, RUN_PAUSED
 from ..models import Project, Run
 from ..store import Store
@@ -59,6 +66,9 @@ class EngagementResult:
             "report_path": self.report_path, "error": self.error,
             "metrics": self.metrics,
         }
+
+
+_RESUMABLE_STATUSES = frozenset({"running", "failed", "interrupted", "budget", "cancelled"})
 
 
 @dataclass(slots=True)
@@ -147,21 +157,69 @@ class Engagement:
         project = self.store.get_project(project_id)
         self._assert_authorized(project)
         self._assert_no_active_run(project.id)
-        run = self._create_run(project_id)
-        handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
-        with self._lock:
-            self._runs[run.id] = handle
-        try:
-            outcome = self._execute(project, run, handle, goal=goal)
-        except Exception as exc:  # noqa: BLE001 - boundary converts to a result
-            self._mark_failed(run.id, exc)
-            outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
-                                 status="failed", summary="", report_path="",
-                                 error=f"{type(exc).__name__}: {exc}", metrics={})
-        finally:
-            handle.result = outcome
-            handle.finished_at = time.monotonic()
-        return EngagementResult.from_outcome(outcome)
+        with self.project_lock(project.id):
+            run = self._create_run(project_id)
+            handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+            with self._lock:
+                self._runs[run.id] = handle
+            try:
+                outcome = self._execute(project, run, handle, goal=goal)
+            except Exception as exc:  # noqa: BLE001 - boundary converts to a result
+                self._mark_failed(run.id, exc)
+                outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
+                                     status="failed", summary="", report_path="",
+                                     error=f"{type(exc).__name__}: {exc}", metrics={})
+            finally:
+                handle.result = outcome
+                handle.finished_at = time.monotonic()
+            return EngagementResult.from_outcome(outcome)
+
+    def resume(self, run_id: str | None = None, *, project_id: str | None = None) -> EngagementResult:
+        """Resume an unfinished run instead of starting a new one.
+
+        A run left in ``running`` (crashed process) or ``failed`` is re-entered:
+        bootstrap is skipped, persisted nodes/assets/todos are reused and the loop
+        continues under the original run id, so traces and costs stay in one place.
+        """
+        self._ensure_open()
+        run = self.store.get_run(run_id) if run_id else self.store.latest_resumable_run(project_id)
+        if run is None:
+            cancelled = self.store.latest_resumable_run(
+                project_id, statuses=("cancelled",))
+            if cancelled is not None:
+                raise ConfigError(
+                    f"the most recent run was cancelled by the operator; "
+                    f"pass its id to resume it: aria-x run --resume {cancelled.id}")
+            raise NotFound(f"no resumable run for {run_id or project_id or 'any project'}")
+        if project_id and run.project_id != project_id:
+            raise ConfigError(
+                f"run {run.id} belongs to project {run.project_id}, not {project_id}")
+        if run.status not in _RESUMABLE_STATUSES:
+            raise ConfigError(
+                f"run {run.id} is {run.status!r}; resumable states are "
+                f"{', '.join(sorted(_RESUMABLE_STATUSES))}")
+        project = self.store.get_project(run.project_id)
+        if project is None:
+            raise NotFound(f"project not found: {run.project_id}")
+        self._assert_authorized(project)
+        self._assert_no_active_run(project.id)
+        with self.project_lock(project.id):
+            self.store.update_run(run.id, status="running", error="", ended_at="")
+            run = self.store.get_run(run.id)
+            handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+            with self._lock:
+                self._runs[run.id] = handle
+            try:
+                outcome = self._execute(project, run, handle, goal=None, resume=True)
+            except Exception as exc:  # noqa: BLE001 - boundary converts to a result
+                self._mark_failed(run.id, exc)
+                outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
+                                     status="failed", summary="", report_path="",
+                                     error=f"{type(exc).__name__}: {exc}", metrics={})
+            finally:
+                handle.result = outcome
+                handle.finished_at = time.monotonic()
+            return EngagementResult.from_outcome(outcome)
 
     def start_background(self, project_id: str, *, goal: str | None = None) -> str:
         """Start a run on a daemon thread and return its run id immediately."""
@@ -169,19 +227,24 @@ class Engagement:
         project = self.store.get_project(project_id)
         self._assert_authorized(project)
         self._assert_no_active_run(project.id)
-        run = self._create_run(project_id)
-        handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
-        thread = threading.Thread(
-            target=self._background_main, args=(project, run, handle, goal),
-            name=f"aria-x-run-{run.id}", daemon=True)
-        handle.thread = thread
-        with self._lock:
-            self._runs[run.id] = handle
-        thread.start()
+        lock = self._acquire_project_lock(project.id)
+        try:
+            run = self._create_run(project_id)
+            handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+            thread = threading.Thread(
+                target=self._background_main, args=(project, run, handle, goal, lock),
+                name=f"aria-x-run-{run.id}", daemon=True)
+            handle.thread = thread
+            with self._lock:
+                self._runs[run.id] = handle
+            thread.start()
+        except BaseException:
+            self._release_project_lock(lock)
+            raise
         return run.id
 
     def _background_main(self, project: Project, run: Run, handle: _RunHandle,
-                         goal: str | None = None) -> None:
+                         goal: str | None = None, lock: Any = None) -> None:
         outcome: RunOutcome | None = None
         try:
             outcome = self._execute(project, run, handle, goal=goal)
@@ -194,13 +257,59 @@ class Engagement:
         finally:
             handle.result = outcome
             handle.finished_at = time.monotonic()
+            self._release_project_lock(lock)
 
     def _execute(self, project: Project, run: Run, handle: _RunHandle, *,
-                 goal: str | None) -> RunOutcome:
+                 goal: str | None, resume: bool = False) -> RunOutcome:
         orchestrator = Orchestrator(
             self.config, store=self.store, events=self.events,
             provider=self._resolve_provider(), cancel=handle.cancel)
-        return orchestrator.run(project, run, goal=goal)
+        return orchestrator.run(project, run, goal=goal, resume=resume)
+
+    def _acquire_project_lock(self, project_id: str):
+        """Take the project lock and return its handle (None when unsupported)."""
+        if _fcntl is None:
+            return None
+        directory = Path(getattr(self.config, "data_dir", "data")) / "locks"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        handle = open(directory / f"{project_id}.lock", "a+")
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise ConfigError(
+                f"project {project_id} is already being run by another process") from exc
+        return handle
+
+    def _release_project_lock(self, handle) -> None:
+        if handle is None:
+            return
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            handle.close()
+        except OSError:
+            pass
+
+    @contextlib.contextmanager
+    def project_lock(self, project_id: str):
+        """Cross-process, non-blocking lock so a project is driven by one owner.
+
+        A file lock is used on purpose: a crashed process leaves
+        ``runs.status='running'`` behind, so a SQL status guard would deadlock
+        the very recovery it is meant to allow. The kernel releases the lock
+        when the owner dies, keeping a crashed run resumable.
+        """
+        handle = self._acquire_project_lock(project_id)
+        try:
+            yield
+        finally:
+            self._release_project_lock(handle)
 
     def _assert_no_active_run(self, project_id: str) -> None:
         """One run per project at a time: two loops would duplicate intents."""

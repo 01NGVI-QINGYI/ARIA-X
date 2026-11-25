@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Sequence
+from typing import Callable, Any, Sequence
 
 from ..config import AriaXConfig, LLMConfig
 from ..errors import BudgetExceeded, LLMError, ProtocolError
@@ -67,7 +67,8 @@ class ModelRouter:
 
     def chat(self, role: str, messages: Sequence[ChatMessage], tools: Sequence[dict[str, Any]] | None = None,
              *, temperature: float | None = None, max_tokens: int | None = None,
-             json_mode: bool | None = None, task_id: str = "", tool_choice: str | None = None) -> LLMResponse:
+             json_mode: bool | None = None, task_id: str = "", tool_choice: str | None = None,
+             on_delta: Callable[[str], None] | None = None) -> LLMResponse:
         if self.budget is not None:
             self.budget.check_llm()
         model = self.llm.model_for(role)
@@ -80,14 +81,25 @@ class ModelRouter:
         started = time.monotonic()
         for attempt in range(attempts):
             try:
-                response = self.provider.chat(
-                    messages,
-                    tools,
-                    temperature=self.llm.temperature if temperature is None else temperature,
-                    max_tokens=max_tokens or self.llm.max_tokens,
-                    json_mode=self.llm.json_mode if json_mode is None else json_mode,
-                    **({"tool_choice": tool_choice} if tool_choice else {}),
-                )
+                stream_fn = getattr(self.provider, "chat_stream", None)
+                can_stream = (on_delta is not None and callable(stream_fn)
+                              and bool(getattr(self.provider, "supports_stream", lambda _t: False)(tools)))
+                if can_stream:
+                    response = stream_fn(
+                        messages, tools, on_delta=on_delta,
+                        temperature=self.llm.temperature if temperature is None else temperature,
+                        max_tokens=max_tokens or self.llm.max_tokens,
+                        json_mode=self.llm.json_mode if json_mode is None else json_mode,
+                    )
+                else:
+                    response = self.provider.chat(
+                        messages,
+                        tools,
+                        temperature=self.llm.temperature if temperature is None else temperature,
+                        max_tokens=max_tokens or self.llm.max_tokens,
+                        json_mode=self.llm.json_mode if json_mode is None else json_mode,
+                        **({"tool_choice": tool_choice} if tool_choice else {}),
+                    )
                 duration = time.monotonic() - started
                 self._record(role, response, duration, task_id, messages)
                 return response
@@ -103,14 +115,15 @@ class ModelRouter:
 
     def json(self, role: str, messages: Sequence[ChatMessage], schema: dict[str, Any] | None = None,
              *, retries: int = 2, task_id: str = "", temperature: float | None = None,
-             max_tokens: int | None = None) -> tuple[Any, LLMResponse]:
+             max_tokens: int | None = None,
+             on_delta: Callable[[str], None] | None = None) -> tuple[Any, LLMResponse]:
         """Call the model and parse a JSON object, retrying once on invalid shape."""
         convo = list(messages)
         last_error = ""
         last_response: LLMResponse | None = None
         for attempt in range(max(1, retries + 1)):
             response = self.chat(role, convo, temperature=temperature, max_tokens=max_tokens,
-                                 json_mode=True, task_id=task_id)
+                                 json_mode=True, task_id=task_id, on_delta=on_delta)
             last_response = response
             try:
                 data = extract_json(response.content)

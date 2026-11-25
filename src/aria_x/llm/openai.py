@@ -7,7 +7,9 @@ that implements ``POST /chat/completions``.
 
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
@@ -33,6 +35,81 @@ class OpenAIProvider:
         self.extra_body = dict(extra_body or {})
         self.name = name
         self.last_status: int | None = None
+
+    def supports_stream(self, tools: Any) -> bool:
+        """Streaming is used only for plain text calls (tool deltas are not parsed)."""
+        return not tools
+
+    def chat_stream(self, messages, tools=None, *, on_delta, temperature=None,
+                    max_tokens=None, json_mode=False, **kwargs):
+        """Stream assistant text, returning the same LLMResponse shape as chat()."""
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [_message_payload(m) for m in messages],
+            "stream": True,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if max_tokens:
+            payload["max_tokens"] = int(max_tokens)
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        payload.update(self.extra_body)
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        headers.update(self.extra_headers)
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(self.endpoint(), data=data, headers=headers, method="POST")
+        collected: list[str] = []
+        finish = ""
+        usage: dict[str, Any] = {}
+        saw_data = False
+        saw_done = False
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    chunk = line[5:].strip()
+                    saw_data = True
+                    if chunk == "[DONE]":
+                        saw_done = True
+                        break
+                    try:
+                        obj = json.loads(chunk)
+                    except ValueError:
+                        continue
+                    if isinstance(obj.get("usage"), dict):
+                        usage = obj["usage"]
+                    for choice in obj.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        piece = delta.get("content")
+                        if piece:
+                            collected.append(piece)
+                            on_delta(piece)
+                        finish = choice.get("finish_reason") or finish
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:400]
+            raise LLMError(f"provider returned HTTP {exc.code}", status=exc.code,
+                           retryable=exc.code in _RETRYABLE_STATUS, details={"body": detail}) from exc
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+                ssl.SSLError, OSError) as exc:
+            # A dropped connection mid-stream is retryable; the partial text is
+            # discarded so a truncated answer is never mistaken for a complete one.
+            raise LLMError(f"stream interrupted: {exc}", retryable=True) from exc
+        if not saw_data:
+            raise LLMError("provider did not return an SSE stream", retryable=True)
+        if not saw_done:
+            raise LLMError("stream ended before completion marker", retryable=True)
+        return LLMResponse(
+            content="".join(collected), tool_calls=[], finish_reason=finish or "stop",
+            model=self.model,
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+            raw={"streamed": True},
+        )
 
     def endpoint(self) -> str:
         if self.base_url.endswith("/chat/completions"):

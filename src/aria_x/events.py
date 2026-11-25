@@ -66,7 +66,8 @@ class Event:
         }
 
     def sse(self) -> str:
-        return f"id: {self.id}\nevent: {self.type}\ndata: {json_dumps(self.data, ensure_ascii=False)}\n\n"
+        head = f"id: {self.id}\n" if self.id else ""
+        return f"{head}event: {self.type}\ndata: {json_dumps(self.data, ensure_ascii=False)}\n\n"
 
 
 class EventBus:
@@ -166,6 +167,33 @@ class EventBus:
             return list(self._recent[-max(1, limit):])
 
     # -- emit ------------------------------------------------------------
+
+    def emit_transient(self, type_: str, *, project_id: str = "", run_id: str = "",
+                       task_id: str = "", data: Mapping[str, Any] | None = None,
+                       **extra: Any) -> None:
+        """Fan out to live subscribers without recording the event.
+
+        Used for high-frequency progress signals (streamed model output) that
+        must reach the console but should not inflate ``_recent``, the JSONL log
+        or the SQLite event table.
+        """
+        payload: dict[str, Any] = dict(data or {})
+        if extra:
+            payload.update(extra)
+        if self._redact:
+            payload = redact_obj(payload)
+        # No id: a frame without an id must never become the client's resume
+        # cursor, because it is not stored in the replay buffer.
+        event = Event(type=type_, project_id=project_id, run_id=run_id, task_id=task_id,
+                      data=payload, id="")
+        with self._lock:
+            if self._closed:
+                return
+            for q in self._subscribers:
+                try:
+                    q.put_nowait(event)
+                except queue.Full:
+                    pass
 
     def emit(self, type_: str, *, project_id: str = "", run_id: str = "", task_id: str = "",
              data: Mapping[str, Any] | None = None, **extra: Any) -> Event:

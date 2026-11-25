@@ -112,6 +112,7 @@ REPORT_STRINGS: dict[str, dict[str, str]] = {
         "ev_col_excerpt": "Excerpt",
 
         "sec_5": "## 5. Attack Path Narrative",
+        "graph_title": "Attack path diagram",
         "attack_none": "No attack path was recorded: the engagement produced neither intents nor lineage edges.",
         "attack_intro": (
             "Each item below is one decision point: the intent, what it observed and what it "
@@ -250,6 +251,7 @@ REPORT_STRINGS: dict[str, dict[str, str]] = {
         "ev_col_excerpt": "摘要",
 
         "sec_5": "## 5. 攻击路径叙述",
+        "graph_title": "攻击路径图",
         "attack_none": "未记录攻击路径：本次评估既未产生意图也未产生血缘边。",
         "attack_intro": "以下每条记录对应一个决策点：探索意图、观测结果及证实内容。血缘关系直接来自图谱边。",
         "attack_intent_line": "{index}. **{title}** — 状态：{status}。",
@@ -384,6 +386,7 @@ REPORT_STRINGS: dict[str, dict[str, str]] = {
         "ev_col_excerpt": "抜粋",
 
         "sec_5": "## 5. 攻撃経路ナラティブ",
+        "graph_title": "攻撃経路図",
         "attack_none": "攻撃経路は記録されませんでした: 意図および系譜エッジのいずれも生成されていません。",
         "attack_intro": "以下の各項目は 1 つの意思決定ポイント（意図・観測結果・実証内容）を示します。系譜はグラフエッジから直接取得しています。",
         "attack_intent_line": "{index}. **{title}** — 状態: {status}。",

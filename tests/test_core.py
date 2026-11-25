@@ -520,3 +520,90 @@ class LLMTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class UnimplementedConfigKeyTests(unittest.TestCase):
+    """Keys this version does not implement must be reported, not silently dropped."""
+
+    def _load(self, body: str) -> AriaXConfig:
+        import tempfile
+        from pathlib import Path
+        tmp = tempfile.mkdtemp()
+        path = Path(tmp) / "cfg.toml"
+        path.write_text(body, encoding="utf-8")
+        return AriaXConfig.load(path)
+
+    def test_removed_engine_fields_are_reported(self) -> None:
+        cfg = self._load(
+            "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n"
+            "[engine]\nlanguage = \"zh\"\nskills_dir = \"skills\"\n"
+            "planner_role = \"planner\"\nreason_on_change = true\n"
+        )
+        self.assertIn("engine.skills_dir", cfg.unknown_keys)
+        self.assertIn("engine.planner_role", cfg.unknown_keys)
+        self.assertIn("engine.reason_on_change", cfg.unknown_keys)
+        # known keys in the same section still apply
+        self.assertEqual(cfg.engine.language, "zh")
+
+    def test_typo_in_known_section_is_reported(self) -> None:
+        cfg = self._load(
+            "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n"
+            "[server]\nport = 8787\nbogus_key = 1\n"
+        )
+        self.assertIn("server.bogus_key", cfg.unknown_keys)
+        self.assertEqual(cfg.server.port, 8787)
+
+    def test_removed_fields_are_absent_from_public_dict(self) -> None:
+        cfg = AriaXConfig()
+        engine = cfg.public_dict()["engine"]
+        for gone in ("skills_dir", "prompts_dir", "planner_role", "worker_role",
+                     "specialist_role", "reason_on_change"):
+            self.assertNotIn(gone, engine)
+
+    def test_doctor_reports_unknown_keys(self) -> None:
+        import argparse
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        from aria_x import cli
+
+        tmp = tempfile.mkdtemp()
+        path = Path(tmp) / "cfg.toml"
+        path.write_text(
+            "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n"
+            "[llm]\nprovider = \"mock\"\n"
+            "[engine]\nskills_dir = \"skills\"\n",
+            encoding="utf-8",
+        )
+        args = argparse.Namespace(config=str(path), json=True, llm=False)
+        with mock.patch("builtins.print") as printer:
+            rc = cli.cmd_doctor(args)
+        payload = json.loads(printer.call_args_list[0][0][0])
+        entry = next(item for item in payload if item["check"] == "config-keys")
+        self.assertTrue(entry["ok"])
+        self.assertIn("engine.skills_dir", entry["warning"])
+        self.assertIn(rc, (0, 1))
+
+class InternalConfigFieldTests(unittest.TestCase):
+    """Derived state must not be settable from a config file."""
+
+    def test_unknown_keys_cannot_be_overridden_from_a_config(self) -> None:
+        import tempfile
+        from pathlib import Path
+        tmp = tempfile.mkdtemp()
+        path = Path(tmp) / "cfg.toml"
+        path.write_text(
+            'unknown_keys = "oops"\n'
+            "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n"
+            "[llm]\nprovider = \"mock\"\n"
+            "[engine]\nskills_dir = \"x\"\n",
+            encoding="utf-8",
+        )
+        cfg = AriaXConfig.load(path)  # must not raise AttributeError
+        self.assertIn("engine.skills_dir", cfg.unknown_keys)
+
+    def test_merge_records_unknown_keys(self) -> None:
+        cfg = AriaXConfig()
+        cfg.merge({"engine": {"bogus": 1}})
+        self.assertIn("engine.bogus", cfg.unknown_keys)

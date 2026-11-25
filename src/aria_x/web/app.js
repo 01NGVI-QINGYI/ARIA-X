@@ -78,6 +78,7 @@
     sseAbort: null,
     sseReconnectTimer: null,
     sseRetryMs: 3000,
+    streamChars: 0,
     sseFailureCount: 0,
     sseLastEventId: "",
     seenEventIds: new Set(),
@@ -1337,6 +1338,15 @@
   }
 
   function onSseEvent(event) {
+    // Progress frames are transient: they are not persisted server-side, so they
+    // must not advance the resume cursor nor enter the timeline history.
+    if (event && event.type === "llm_delta") {
+      let delta = {};
+      try { delta = event.data ? JSON.parse(event.data) : {}; } catch { delta = {}; }
+      state.streamChars = Number(delta.chars) || state.streamChars || 0;
+      updateStreamBadge();
+      return;
+    }
     const rawId = event && event.lastEventId ? String(event.lastEventId) : "";
     if (rawId) {
       if (state.seenEventIds.has(rawId)) return;
@@ -1365,6 +1375,13 @@
     $("timeline-count").textContent = String(state.events.length);
     if (!state.timelinePaused) appendTimelineItem(item);
     maybeRefreshForEvent(item.type);
+  }
+
+  function updateStreamBadge() {
+    const el = $("sse-status");
+    if (!el) return;
+    if (!state.streamChars) return;
+    el.textContent = `${state.streamChars} chars`;
   }
 
   function maybeRefreshForEvent(type) {

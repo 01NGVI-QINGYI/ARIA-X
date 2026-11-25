@@ -34,6 +34,7 @@ from .. import __version__
 from ..errors import ScopeViolation
 from ..util import json_dumps, now_iso, redact, truncate
 from .base import ToolContext, ToolRegistry, ToolResult, ToolSpec
+from .dnspin import pin_resolution
 from .terminal import audit, clamp_float, clamp_int
 
 USER_AGENT = f"ARIA-X/{__version__} (authorized security research)"
@@ -135,6 +136,27 @@ def _save_evidence(ctx: ToolContext, payload: dict[str, Any], prefix: str = "htt
         return None
 
 
+def _verified_target(ctx: ToolContext, decision: Any, host: str,
+                     port: int | None = None) -> str:
+    """Return the address this authorization approved, or refuse to connect.
+
+    A hostname that produced no address during authorization has not passed the
+    IP-level checks (deny networks, private/public policy). Resolving it later at
+    connect time would let that address bypass those checks, so such a request is
+    rejected instead of being resolved on the fly.
+    """
+    if not getattr(decision, "ips", None):
+        raise ScopeViolation(
+            f"cannot verify the address of '{host}'; refusing to connect without an "
+            f"address-level authorization (check scope.allow_public_targets and DNS)",
+            target=host, host=host, port=port)
+    approved = ""
+    approver = getattr(ctx.scope, "approved_address", None)
+    if callable(approver):
+        approved = approver(decision.host or host, decision.port or port, decision.ips)
+    return approved or str(decision.ips[0])
+
+
 class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Follow a redirect only when the *destination* is still authorized.
 
@@ -143,10 +165,14 @@ class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
     Every hop is re-authorized, re-rate-limited and audited.
     """
 
-    def __init__(self, ctx: ToolContext, log: list[dict[str, Any]]) -> None:
+    def __init__(self, ctx: ToolContext, log: list[dict[str, Any]],
+                 pins: dict[str, str] | None = None) -> None:
         super().__init__()
         self.ctx = ctx
         self.log = log
+        # Request-local host -> address map: every hop pins the address its own
+        # authorization approved, never a value shared with other requests.
+        self.pins = pins if pins is not None else {}
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
         raw_new = str(newurl or "")
@@ -154,6 +180,10 @@ class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
             raise ScopeViolation("redirect target contains invalid characters", target=raw_new)
         absolute = urllib.parse.urljoin(req.full_url, raw_new)
         decision = self.ctx.scope.require_url(absolute, "GET")
+        approved = _verified_target(self.ctx, decision, decision.host or absolute,
+                                    decision.port)
+        if decision.host:
+            self.pins[decision.host.lower().rstrip(".")] = approved
         self.ctx.scope.acquire_slot(decision.host or "")
         # Never forward credentials to a different origin (urllib would).
         if urllib.parse.urlsplit(absolute).netloc != urllib.parse.urlsplit(req.full_url).netloc:
@@ -199,10 +229,19 @@ def _http_request(ctx: ToolContext, *, method: str, url: str, headers: dict[str,
     try:
         request = urllib.request.Request(decision.target or url, data=data, headers=request_headers, method=method)
         # No environment proxies, and redirects are scope-checked hop by hop.
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
-                                             _ScopedRedirectHandler(ctx, redirects))
+        request_pins: dict[str, str] = {}
+        approved = _verified_target(ctx, decision, host, decision.port)
+        if decision.host:
+            request_pins[decision.host.lower().rstrip(".")] = approved
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _ScopedRedirectHandler(ctx, redirects, request_pins))
         try:
-            resp = opener.open(request, timeout=timeout)
+            # Contact exactly the address that scope authorized (see tools.dnspin).
+            # Request-local map: a concurrent authorization for the same host
+            # cannot change which address this request connects to.
+            with pin_resolution(lambda: request_pins):
+                resp = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # non-2xx is still a usable observation
             resp = exc
         except urllib.error.URLError as exc:
@@ -301,7 +340,7 @@ def dns_lookup(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     if record_type not in {"A", "AAAA", "PTR", "ANY"}:
         return ToolResult.failure("record_type must be one of A, AAAA, PTR, ANY",
                                   data={"record_type": record_type})
-    ctx.scope.require_host(host)
+    decision = ctx.scope.require_host(host)
     ctx.scope.acquire_slot(host)
     started = time.monotonic()
     if record_type == "PTR":
@@ -370,7 +409,7 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     host = str(kwargs.get("host") or "").strip()
     if not host:
         return ToolResult.failure("host is required")
-    ctx.scope.require_host(host)
+    decision = ctx.scope.require_host(host)
     max_ports = clamp_int(kwargs.get("max_ports"), 1, int(ctx.config.scope.max_ports or 200), 64)
     default_ports = list(ctx.config.scope.ports or [80, 443])
     ports = _parse_ports(kwargs.get("ports"), max_ports, default_ports)
@@ -380,8 +419,13 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     want_banners = bool(kwargs.get("banners", False))
     started = time.monotonic()
 
+    # connect_ex() resolves in C, so the pinned address must be passed literally:
+    # a thread-local getaddrinfo wrapper cannot influence it.
+    # This decision's approved address; never another request's pin, and never
+    # an ips[0] that fell outside the CIDR the operator declared.
+    target = _verified_target(ctx, decision, host, None)
     try:
-        infos = socket.getaddrinfo(host, ports[0], socket.AF_UNSPEC, socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(target, ports[0], socket.AF_UNSPEC, socket.SOCK_STREAM)
         family = infos[0][0] if infos else socket.AF_INET
     except (OSError, socket.gaierror) as exc:
         audit(ctx, "port_scan", "error", host, {"error": str(exc)})
@@ -392,7 +436,7 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
         sock = socket.socket(family, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
-            if sock.connect_ex((host, port)) != 0:
+            if sock.connect_ex((target, port)) != 0:
                 return None
             banner = ""
             if want_banners:
@@ -432,7 +476,7 @@ def tls_probe(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
         return ToolResult.failure("host is required")
     port = clamp_int(kwargs.get("port"), 1, 65535, 443)
     timeout = clamp_float(kwargs.get("timeout"), 1.0, 30.0, 8.0)
-    ctx.scope.require_host(host, port)
+    decision = ctx.scope.require_host(host, port)
     ctx.scope.acquire_slot(host)
     started = time.monotonic()
 
@@ -441,7 +485,9 @@ def tls_probe(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
         if not verify:
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-        raw = socket.create_connection((host, port), timeout=timeout)
+        approved = _verified_target(ctx, decision, host, port)
+        with pin_resolution({host.lower().rstrip("."): approved}):
+            raw = socket.create_connection((host, port), timeout=timeout)
         try:
             tls = context.wrap_socket(raw, server_hostname=host)
         except Exception:

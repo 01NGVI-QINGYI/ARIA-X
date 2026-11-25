@@ -117,6 +117,7 @@ class Agent:
                     self.spec.role, messages, tool_specs,
                     temperature=self.spec.temperature, max_tokens=self.spec.max_tokens,
                     task_id=task.task_id,
+                    on_delta=self._on_delta(task),
                 )
                 usage_prompt += response.prompt_tokens
                 usage_completion += response.completion_tokens
@@ -242,7 +243,8 @@ class Agent:
         )
         response = self.router.chat(self.spec.role, list(messages) + [prompt], None,
                                     temperature=self.spec.temperature,
-                                    max_tokens=self.spec.max_tokens, task_id=task.task_id)
+                                    max_tokens=self.spec.max_tokens, task_id=task.task_id,
+                                    on_delta=self._on_delta(task))
         return response.content or ""
 
     # ------------------------------------------------------------------
@@ -266,6 +268,36 @@ class Agent:
                              })
         _budget_tool(self.ctx.budget)
         return result, rendered
+
+    def _on_delta(self, task: Any):
+        """Return a throttled sink for streamed model output.
+
+        Deltas are emitted as *transient* events so the console shows progress
+        while the model thinks, without writing a row per token to SQLite or the
+        JSONL log. At most one event every ``STREAM_EVENT_INTERVAL`` seconds.
+        """
+        state = {"chars": 0, "sent_at": 0.0}
+
+        def sink(piece: str) -> None:
+            if not piece:
+                return
+            state["chars"] += len(piece)
+            now = time.monotonic()
+            if now - state["sent_at"] < 0.25:
+                return
+            state["sent_at"] = now
+            bus = getattr(self.ctx, "events", None)
+            if bus is None:
+                return
+            emit = getattr(bus, "emit_transient", None)
+            if not callable(emit):
+                return
+            emit("llm_delta", project_id=getattr(self.ctx.project, "id", ""),
+                 run_id=getattr(self.ctx, "run_id", ""),
+                 task_id=getattr(task, "task_id", ""),
+                 data={"role": self.spec.role, "chars": state["chars"]})
+
+        return sink
 
     def _trace(self, task: AgentTask, kind: str, content: str, *, tool_name: str = "",
                extra: dict[str, Any] | None = None) -> None:

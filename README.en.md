@@ -25,8 +25,8 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-269%20passing-brightgreen">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
+  <img alt="tests" src="https://img.shields.io/badge/tests-354%20passing-brightgreen">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-orange">
 </p>
 
 ---
@@ -50,26 +50,35 @@ Each verification engagement follows an auditable **directed state-space search*
 
 ### Compact Lineage Diagram
 
+<div align="center">
+
 ```mermaid
 flowchart LR
-    subgraph UP["Upstream Inspirations (Concepts & Engineering Discipline Only)"]
-        direction TB
-        A["<b>ARTEX</b> (AGPL-3.0)<br/>Dual Graph · Planner Sole Intent Source<br/>Cross-Wakeup Todos · Traces · Approval Gate"]
-        C["<b>Cairn</b> (AGPL-3.0)<br/>Fact / Intent / Hint Blackboard<br/>OODA Loop · State-Space Search"]
-        P["<b>PentAGI</b> (MIT)<br/>Specialist Delegation · Provider Router<br/>Sandboxed Terminal · Layered Memory"]
+    subgraph UP["Upstream Lineage"]
+        C["Cairn (AGPL-3.0)<br/>Fact/Intent Board<br/>OODA Reasoning<br/>State-Space Search"]
+        A["ARTEX (AGPL-3.0)<br/>Dual Graph + Traces<br/>Planner Intents<br/>Todos + Approvals"]
+        P["PentAGI (MIT)<br/>Specialist Team<br/>Provider Router<br/>Sandbox + Memory"]
     end
 
-    subgraph CORE["ARIA-X (Unified Zero-Dependency Python Engine)"]
-        direction TB
-        ST["<b>Unified State Layer (store/)</b><br/>15-Table SQLite: nodes / edges / assets / todos / traces / evidence"]
-        OR["<b>Unified Orchestration (engine/)</b><br/>bootstrap → reason → explore → persist → report"]
-        EX["<b>Guarded Execution (tools/ & agents/)</b><br/>27 Built-in Tools · Scope Allowlist · Approval Gate · 4D Budgets"]
+    subgraph CORE["ARIA-X Core"]
+        ST["Unified State<br/>store/ (SQLite)<br/>15-Table WAL Store<br/>Exploration + Assets"]
+        OR["Orchestration<br/>engine/ Loop<br/>4D Budgets + Todos<br/>Lock + Resume"]
+        EX["Guarded Execution<br/>agents · tools · llm<br/>27 Tools + Sandbox<br/>Scope + DNS Pin"]
     end
 
-    A & C --> ST & OR
+    OUT(["Outputs<br/>report · server · web<br/>Evidence Reports<br/>Audit + SSE Console"])
+
+    C --> ST
+    C --> OR
+    A --> ST
+    A --> OR
     P --> EX
-    ST & OR & EX --> OUT(["<b>Reproducible Artifacts</b><br/>State Graph · Audit Trail · Evidence-Backed Report"])
+    ST --> OUT
+    OR --> OUT
+    EX --> OUT
 ```
+
+</div>
 
 ### Capability Fusion Matrix
 
@@ -123,21 +132,26 @@ ARIA-X combines context-aware agent reasoning with explicit state, execution pol
 
 Main execution loop ([src/aria_x/engine/orchestrator.py](src/aria_x/engine/orchestrator.py)):
 
-```text
-bootstrap (optional: single initial pass to gather baseline facts)
-   ↓
-reason (Planner reads the blackboard → emits Intents + Todos, or marks complete)
-   ↓
-dispatch (schedules up to max_concurrency Explore tasks, respecting Todo dependencies)
-   ↓
-worker OODA (invokes guarded tools → records Fact / Finding / Assets / Goal Proven)
-   ↓
-persist (commits nodes, edges, asset anchors, traces, evidence, and Todo state)
-   ↓
-budget / timeout / idle check → continues to next round or wraps up cleanly
-   ↓
-report (renders Markdown + HTML + findings.json) + JSONL event archive + audit trail
+<div align="center">
+
+```mermaid
+flowchart LR
+    BOOT["1. bootstrap<br/>Baseline probe"]
+    RSN["2. reason<br/>Emit Intents"]
+    DSP["3. dispatch<br/>Parallel tasks"]
+    WRK["4. worker<br/>Guarded tools"]
+    PST["5. persist<br/>SQLite + audit"]
+    RPT(["6. report<br/>MD / HTML / JSON"])
+
+    BOOT --> RSN
+    RSN --> DSP
+    DSP --> WRK
+    WRK --> PST
+    PST -->|"next round"| RSN
+    PST -->|"done / limit"| RPT
 ```
+
+Budget, timeout and idle checks decide whether the loop continues; `persist` also writes the JSONL event archive and the audit trail.
 
 **Architectural invariants**:
 1. **Single LLM entry point**: All model calls route through `ModelRouter`, with per-role model overrides (`[llm.role_models]`).
@@ -372,9 +386,9 @@ ARIA-X integrates target scoping, risk-based approvals, and execution auditing i
 ### 2. Current Design Scope
 - **Model reasoning backed by evidence**: LLMs guide exploration, while inspectable tool outputs and recorded evidence support findings. Researchers should verify complex conclusions.
 - **Layered execution controls**: `CommandPolicy` applies heuristic command filtering. For process isolation, use the Docker backend (example config and `aria-x init` template set `network = "none"`; the in-code `SandboxConfig` default is `"bridge"`); command filtering alone is not an OS-level sandbox.
-- **Focused on local research**: SQLite WAL persistence supports local experiments and small-team workflows. Distributed scheduling is outside the v0.2.1 feature set.
+- **Focused on local research**: SQLite WAL persistence supports local experiments and small-team workflows. Distributed scheduling is outside the v0.3.0 feature set.
 - **Purpose-built orchestration**: The built-in toolkit focuses on scoped validation, state management, and reporting rather than bundling exploit payloads or third-party scanners.
-- **Clear development roadmap**: Dedicated prompt-injection classification and crash-resume of in-progress engagements are not implemented in v0.2.1; see [Roadmap](docs/ROADMAP.md).
+- **Clear development roadmap**: Dedicated prompt-injection classification is not implemented in v0.3.0; interrupted engagements can be continued with `aria-x run --resume`; see [Roadmap](docs/ROADMAP.md).
 
 See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model and vulnerability disclosure policy, and [docs/ROADMAP.md](docs/ROADMAP.md) for planned work.
 
@@ -408,13 +422,13 @@ Every run writes three self-contained artifacts to `runs/<run_id>/`:
 ### Docker
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.2.1 .
+docker build -f docker/Dockerfile -t aria-x:0.3.0 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.2.1
+  aria-x:0.3.0
 ```
 
 The container image packages only ARIA-X's Python standard-library core without third-party scanners. Deploying with `docker/docker-compose.yml` requires an explicit non-empty `ARIA_X_AUTH_TOKEN` (Compose fails fast if unset or empty). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for details.
@@ -422,7 +436,7 @@ The container image packages only ARIA-X's Python standard-library core without 
 ### Verification & Self-Check Scripts
 
 ```bash
-bash scripts/verify.sh          # runs all 269 unit tests + offline end-to-end demo (no network or API key)
+bash scripts/verify.sh          # runs all 354 unit tests + offline end-to-end demo (no network or API key)
 bash scripts/dev.sh test        # runs the unit test suite only
 bash scripts/dev.sh doctor      # runs environment diagnostics
 ```
@@ -449,7 +463,7 @@ ARIA-X/
 │   ├── report/                # Markdown / HTML / findings.json renderers
 │   ├── server/                # ThreadingHTTPServer REST API and SSE stream
 │   └── web/                   # zero-CDN local web console (HTML/CSS/JS)
-├── tests/                     # 269 unit and integration tests
+├── tests/                     # 354 unit and integration tests
 ├── examples/                  # local offline demo target, config, and scenario script
 ├── configs/                   # example configuration files
 └── docs/                      # architecture, fusion mapping, tools, security, deployment, roadmap
@@ -525,5 +539,5 @@ This software is provided **"AS IS"**, without warranty of any kind, express or 
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.2.1 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · Local, isolated study and research only</sub>
+  <sub>ARIA-X v0.3.0 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · Local, isolated study and research only</sub>
 </p>

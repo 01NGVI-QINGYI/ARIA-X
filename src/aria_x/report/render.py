@@ -294,6 +294,12 @@ def render_markdown(
     out.append("")
     out.extend(_attack_path(export, nodes_by_id, strings))
     out.append("")
+    graph = attack_graph_mermaid(export)
+    if graph:
+        out.append(f"**{strings['graph_title']}**")
+        out.append("")
+        out.append(graph)
+        out.append("")
 
     # 6. Assets ------------------------------------------------------------
     out.append(strings["sec_6"])
@@ -524,8 +530,12 @@ def _split_table_row(line: str) -> list[str]:
     return cells
 
 
-def markdown_to_html(markdown: str) -> str:
-    """Convert the report's Markdown subset to escaped HTML."""
+def markdown_to_html(markdown: str, *, mermaid_svg: str = "") -> str:
+    """Convert the report's Markdown subset to escaped HTML.
+
+    When *mermaid_svg* is provided, ``mermaid`` fences are replaced by that
+    inline SVG so the HTML report needs no JavaScript or CDN.
+    """
     lines = str(markdown or "").replace("\r\n", "\n").split("\n")
     out: list[str] = []
     index = 0
@@ -552,6 +562,9 @@ def markdown_to_html(markdown: str) -> str:
                 code.append(lines[index])
                 index += 1
             index += 1
+            if fence.group(1) == "mermaid" and mermaid_svg:
+                out.append(f'<figure class="attack-graph">{mermaid_svg}</figure>')
+                continue
             language = f' class="language-{_escape(fence.group(1))}"' if fence.group(1) else ""
             out.append(f"<pre><code{language}>{_escape(chr(10).join(code))}</code></pre>")
             continue
@@ -659,6 +672,8 @@ ul,ol{padding-left:24px}
 li{margin:5px 0}
 footer{border-top:1px solid #1e2c3b;color:#72869a;font-size:12px;padding:20px 28px 40px;text-align:center}
 @media print{body{background:#fff;color:#111}.hero{background:#fff;border:0}main{max-width:none}.stat{border-color:#ccc}code,pre,th,td{border-color:#c8c8c8;background:#f7f7f7;color:#111}th{background:#eee}a{color:#0645ad}}
+figure.attack-graph{margin:1.2em 0;overflow-x:auto;background:#0f172a;border-radius:10px;padding:8px}
+figure.attack-graph svg{max-width:100%;height:auto}
 """
 
 
@@ -668,6 +683,7 @@ def render_html(
     meta: Mapping[str, Any] | None = None,
     *,
     language: str | None = None,
+    graph_svg: str = "",
 ) -> str:
     """Wrap rendered Markdown in a self-contained, escaped dark HTML document."""
     meta = dict(meta or {})
@@ -687,7 +703,12 @@ def render_html(
               f'<div class="label">{_escape(strings["html_stat_assets"])}</div></div>'
               f'<div class="stat"><div class="value">{counts["nodes"].get("fact", 0)}</div>'
               f'<div class="label">{_escape(strings["html_stat_facts"])}</div></div>')
-    body = markdown_to_html(markdown)
+    if not graph_svg and export:
+        try:
+            graph_svg = attack_graph_svg(export)
+        except Exception:  # a diagram must never break the report
+            graph_svg = ""
+    body = markdown_to_html(markdown, mermaid_svg=graph_svg)
     raw_ver = _meta_text(meta, "version", __version__)
     ver_label = raw_ver if raw_ver.startswith("v") else f"v{raw_ver}"
     run_id = _meta_text(meta, "run_id")
@@ -701,7 +722,7 @@ def render_html(
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         '<meta name="generator" content="ARIA-X">',
         f"<title>{_escape(title)}</title>",
-        f"<style>{_CSS}</style>",
+            f"<style>{_CSS}</style>",
         "</head>",
         "<body>",
         '<header class="hero"><div class="inner">',
@@ -748,7 +769,8 @@ def write_report(
     directory = Path(run_dir)
     directory.mkdir(parents=True, exist_ok=True)
     markdown = render_markdown(export, meta=meta, language=language)
-    html_text = render_html(markdown, export, meta, language=language)
+    html_text = render_html(markdown, export, meta, language=language,
+                           graph_svg=attack_graph_svg(export))
     payload = _findings_payload(export, meta)
     markdown_path = directory / "report.md"
     html_path = directory / "report.html"
@@ -757,3 +779,168 @@ def write_report(
     html_path.write_text(html_text, encoding="utf-8")
     json_path.write_text(json_dumps(payload, indent=2), encoding="utf-8")
     return {"markdown": str(markdown_path), "html": str(html_path), "json": str(json_path)}
+
+
+# ---------------------------------------------------------------------------
+# attack-path diagram (Mermaid for Markdown, inline SVG for the HTML report)
+# ---------------------------------------------------------------------------
+
+_MAX_GRAPH_ASSETS = 18
+_MAX_GRAPH_FINDINGS = 12
+
+# File-ish suffixes that must never be mistaken for a hostname.
+def _anchors(export: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Map node id -> anchored asset ids (``finding -> asset`` edges)."""
+    out: dict[str, list[str]] = {}
+    for item in _as_list(export.get("anchors")):
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "")
+        asset_id = str(item.get("asset_id") or "")
+        if node_id and asset_id:
+            out.setdefault(node_id, []).append(asset_id)
+    return out
+
+
+def _graph_model(export: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[str]]] | None:
+    """Return (asset chain, findings, finding_id -> asset_ids), capped for readability."""
+    assets = [a for a in _as_list(export.get("assets")) if isinstance(a, dict)]
+    findings = _findings(export)
+    anchors = _anchors(export)
+    if not assets and not findings:
+        return None
+    by_id = {str(a.get("id")): a for a in assets}
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def walk(asset: dict[str, Any], depth: int = 0) -> None:
+        if depth > 6 or len(ordered) >= _MAX_GRAPH_ASSETS:
+            return
+        aid = str(asset.get("id"))
+        if aid in seen:
+            return
+        seen.add(aid)
+        ordered.append(asset)
+        for child in assets:
+            if str(child.get("parent_id") or "") == aid:
+                walk(child, depth + 1)
+
+    for asset in assets:
+        parent = str(asset.get("parent_id") or "")
+        if not parent or parent not in by_id:
+            walk(asset)
+    for asset in assets:
+        if str(asset.get("id")) not in seen and len(ordered) < _MAX_GRAPH_ASSETS:
+            ordered.append(asset)
+            seen.add(str(asset.get("id")))
+    kept = {str(a.get("id")) for a in ordered}
+    links = {str(f.get("id")): [a for a in anchors.get(str(f.get("id")), []) if a in kept]
+             for f in findings}
+    return ordered, findings[:_MAX_GRAPH_FINDINGS], links
+
+
+def _short_label(text: Any, limit: int = 46) -> str:
+    """Single-line, self-truncated label (never the ``truncate()`` marker)."""
+    raw = str(text if text is not None else "").replace("\r", " ").replace("\n", " ").strip()
+    if len(raw) > limit:
+        raw = raw[: limit - 1].rstrip() + "…"
+    return raw or "—"
+
+
+def _mermaid_label(text: Any, limit: int = 46) -> str:
+    return _short_label(text, limit).replace('"', "'")
+
+
+def attack_graph_mermaid(export: Mapping[str, Any]) -> str:
+    """Render the asset chain and anchored findings as a Mermaid ``flowchart TD``."""
+    model = _graph_model(export)
+    if model is None:
+        return ""
+    assets, findings, links = model
+    lines = ["```mermaid", "flowchart TD"]
+    for index, asset in enumerate(assets):
+        kind = _short_label(asset.get("kind"), 18)
+        lines.append(f'  A{index}["{kind}: {_mermaid_label(asset.get("value"))}"]')
+    parent_index = {str(a.get("id")): i for i, a in enumerate(assets)}
+    for index, asset in enumerate(assets):
+        parent = str(asset.get("parent_id") or "")
+        if parent in parent_index and parent_index[parent] != index:
+            lines.append(f"  A{parent_index[parent]} --> A{index}")
+    for index, finding in enumerate(findings):
+        severity = _severity(finding).lower()
+        lines.append(f'  F{index}["{severity.upper()}: {_mermaid_label(finding.get("title"))}"]')
+        # Only real anchors create edges; an unanchored finding stays a lone node.
+        for asset_id in links.get(str(finding.get("id")), []):
+            lines.append(f"  A{parent_index[asset_id]} --> F{index}")
+    lines.append("  classDef sev_critical fill:#7f1d1d,stroke:#f87171,color:#fff")
+    lines.append("  classDef sev_high fill:#7c2d12,stroke:#fb923c,color:#fff")
+    lines.append("  classDef sev_medium fill:#78350f,stroke:#fbbf24,color:#fff")
+    lines.append("  classDef sev_low fill:#14532d,stroke:#4ade80,color:#fff")
+    for index, finding in enumerate(findings):
+        severity = _severity(finding).lower()
+        css = {"critical": "sev_critical", "high": "sev_high",
+               "medium": "sev_medium", "low": "sev_low"}.get(severity)
+        if css:
+            lines.append(f"  class F{index} {css}")
+    lines.append("```")
+    return "\n".join(lines)
+
+
+def attack_graph_svg(export: Mapping[str, Any]) -> str:
+    """Render the same graph as a standalone inline SVG (no JS, no CDN)."""
+    model = _graph_model(export)
+    if model is None:
+        return ""
+    assets, findings, links = model
+    node_h, gap, left_w, right_w = 34, 12, 300, 320
+    rows = max(len(assets), len(findings), 1)
+    height = 24 + rows * (node_h + gap)
+    width = left_w + right_w + 120
+
+    def box(x: int, y: int, w: int, text: str, *, fill: str, stroke: str, bright: bool) -> str:
+        label = _escape_text(_short_label(text, 44))
+        colour = "#0f172a" if bright else "#f8fafc"
+        return (
+            f'<rect x="{x}" y="{y}" width="{w}" height="{node_h}" rx="6" '
+            f'fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>'
+            f'<text x="{x + 10}" y="{y + node_h // 2 + 5}" font-size="12" fill="{colour}">{label}</text>'
+        )
+
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+        f'viewBox="0 0 {width} {height}" font-family="ui-sans-serif,system-ui,sans-serif">',
+        '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" '
+        'orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#475569"/></marker></defs>',
+        f'<rect width="{width}" height="{height}" fill="#0f172a"/>',
+    ]
+    asset_y: dict[str, int] = {}
+    for index, asset in enumerate(assets):
+        y = 20 + index * (node_h + gap)
+        asset_y[str(asset.get("id"))] = y
+        parts.append(box(30, y, left_w, f"{asset.get('kind')}: {asset.get('value')}",
+                         fill="#1e293b", stroke="#38bdf8", bright=False))
+    severities = {"critical": "#f87171", "high": "#fb923c", "medium": "#fbbf24", "low": "#4ade80"}
+    fills = {"critical": "#7f1d1d", "high": "#7c2d12", "medium": "#78350f", "low": "#14532d"}
+    for index, finding in enumerate(findings):
+        severity = _severity(finding).lower()
+        y = 20 + index * (node_h + gap)
+        parts.append(box(width - right_w - 30, y, right_w,
+                         f"{severity.upper()}: {finding.get('title')}",
+                         fill=fills.get(severity, "#334155"),
+                         stroke=severities.get(severity, "#94a3b8"), bright=False))
+        for asset_id in links.get(str(finding.get("id")), []):
+            y_from = asset_y.get(asset_id)
+            if y_from is None:
+                continue
+            parts.append(
+                f'<line x1="{30 + left_w}" y1="{y_from + node_h // 2}" '
+                f'x2="{width - right_w - 30}" y2="{y + node_h // 2}" '
+                f'stroke="#475569" stroke-width="1.2" marker-end="url(#arrow)"/>'
+            )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def _escape_text(value: str) -> str:
+    return (str(value).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))

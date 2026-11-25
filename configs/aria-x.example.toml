@@ -65,5 +65,3 @@ auth_token = ""                # or ARIA_X_AUTH_TOKEN
 language = "zh"
 bootstrap = true
 max_idle_rounds = 2
-max_concurrency = 2
-skills_dir = "skills"

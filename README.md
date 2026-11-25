@@ -25,8 +25,8 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-269%20passing-brightgreen">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
+  <img alt="tests" src="https://img.shields.io/badge/tests-354%20passing-brightgreen">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-orange">
 </p>
 
 ---
@@ -50,26 +50,35 @@
 
 ### 紧凑谱系与融合图
 
+<div align="center">
+
 ```mermaid
 flowchart LR
-    subgraph UP["上游思想来源（仅借鉴架构与工程纪律）"]
-        direction TB
-        A["<b>ARTEX</b> (AGPL-3.0)<br/>双图分离 · Planner 唯一意图源<br/>跨唤醒 Todo · 过程轨迹 · 审批门"]
-        C["<b>Cairn</b> (AGPL-3.0)<br/>Fact / Intent / Hint 黑板<br/>OODA 循环 · 状态空间搜索"]
-        P["<b>PentAGI</b> (MIT)<br/>专家角色委托 · Provider 抽象<br/>隔离沙箱终端 · 分层记忆"]
+    subgraph UP["上游思想来源"]
+        C["Cairn (AGPL-3.0)<br/>Fact/Intent 黑板<br/>OODA 推理闭环<br/>状态空间搜索"]
+        A["ARTEX (AGPL-3.0)<br/>双图分离与轨迹<br/>Planner 意图源<br/>Todo 链与审批门"]
+        P["PentAGI (MIT)<br/>专家角色委托<br/>多模型路由抽象<br/>隔离沙箱与记忆"]
     end
 
-    subgraph CORE["ARIA-X（纯 Python 标准库统一实现）"]
-        direction TB
-        ST["<b>统一状态层 (store/)</b><br/>SQLite 15 表：节点 / 边 / 资产 / Todo / 轨迹 / 证据"]
-        OR["<b>统一编排层 (engine/)</b><br/>bootstrap → reason → explore → persist → report"]
-        EX["<b>受控执行层 (tools/ & agents/)</b><br/>27 个内置工具 · Scope 白名单 · 审批门 · 预算护栏"]
+    subgraph CORE["ARIA-X 核心层"]
+        ST["统一状态层<br/>store/ (SQLite)<br/>15 表 WAL 持久化<br/>探索图与资产图"]
+        OR["统一编排层<br/>engine/ 主循环<br/>四维预算与 Todo<br/>跨进程锁与续跑"]
+        EX["受控执行层<br/>agents · tools · llm<br/>27 工具与沙箱<br/>Scope 与 DNS 钉扎"]
     end
 
-    A & C --> ST & OR
+    OUT(["可复现输出<br/>report · server · web<br/>证据链报告与审计<br/>本地 SSE 控制台"])
+
+    C --> ST
+    C --> OR
+    A --> ST
+    A --> OR
     P --> EX
-    ST & OR & EX --> OUT(["<b>可复现输出</b><br/>统一状态图 · 审计日志 · 证据链报告"])
+    ST --> OUT
+    OR --> OUT
+    EX --> OUT
 ```
+
+</div>
 
 ### 各层能力融合对照
 
@@ -123,21 +132,26 @@ ARIA-X 将上下文感知的智能体推理与结构化状态管理、工具执�
 
 单次验证运行的主循环（详见 [src/aria_x/engine/orchestrator.py](src/aria_x/engine/orchestrator.py)）：
 
-```text
-bootstrap（可选：单次初始探测与基线事实收集）
-   ↓
-reason（Planner 读取黑板 → 生成下一批 Intents + Todos，或判定完成）
-   ↓
-dispatch（按依赖关系并发派发最多 max_concurrency 个 Explore 任务）
-   ↓
-worker OODA（调用受控工具 → 提交 Fact / Finding / Assets / Goal Proven）
-   ↓
-persist（原子化写入节点、边、资产锚点、过程轨迹、证据与 Todo 状态）
-   ↓
-预算 / 超时 / 空转检测 → 进入下一轮推理或平稳收尾
-   ↓
-report（生成 Markdown + HTML + findings.json）+ JSONL 事件归档 + 审计落库
+<div align="center">
+
+```mermaid
+flowchart LR
+    BOOT["1. bootstrap<br/>初始基线探测"]
+    RSN["2. reason<br/>Planner 生成意图"]
+    DSP["3. dispatch<br/>并发派发任务"]
+    WRK["4. worker<br/>受控工具验证"]
+    PST["5. persist<br/>状态与证据落库"]
+    RPT(["6. report<br/>生成证据链报告"])
+
+    BOOT --> RSN
+    RSN --> DSP
+    DSP --> WRK
+    WRK --> PST
+    PST -->|"下一轮"| RSN
+    PST -->|"完成 / 预算收尾"| RPT
 ```
+
+预算、超时与空转检测决定循环继续还是平稳收尾；`persist` 阶段同时写出 JSONL 事件归档并落库审计记录。
 
 **关键架构边界**：
 1. **模型调用唯一入口**：所有模型请求必须经过 `ModelRouter`，支持按角色（`planner / worker / specialist / reporter`）独立配置模型（`[llm.role_models]`）。
@@ -372,9 +386,9 @@ ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执�
 ### 2. 当前版本的设计定位
 - **模型推理与证据相结合**：模型负责提出探索方向，工具输出与记录的证据支撑发现；复杂结论仍需研究者核验。
 - **分层执行控制**：`CommandPolicy` 提供启发式命令过滤；进程级隔离可使用 Docker 后端（示例配置与 `aria-x init` 模板预设 `network = "none"`，程序内置默认值为 `bridge`）。命令过滤本身不等于操作系统沙箱。
-- **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.2.1 的实现范围。
+- **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.3.0 的实现范围。
 - **面向验证的工具集**：内置工具聚焦受控验证、状态管理与报告，不打包独立漏洞利用载荷或第三方扫描器。
-- **明确的演进方向**：专用 Prompt Injection 分类器和中断运行的原位恢复尚未实现，相关计划见 [开发路线图](docs/ROADMAP.md)。
+- **明确的演进方向**：专用 Prompt Injection 分类器尚未实现；中断或预算耗尽的运行可用 `aria-x run --resume` 继续，相关计划见 [开发路线图](docs/ROADMAP.md)。
 
 完整的威胁模型与安全披露流程见 [docs/SECURITY.md](docs/SECURITY.md)，演进路线图见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 
@@ -408,13 +422,13 @@ ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执�
 ### Docker 运行
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.2.1 .
+docker build -f docker/Dockerfile -t aria-x:0.3.0 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.2.1
+  aria-x:0.3.0
 ```
 
 容器镜像仅包含 ARIA-X 标准库核心代码，不打包任何第三方扫描器。使用 `docker/docker-compose.yml` 启动时，必须显式设置非空环境变量 `ARIA_X_AUTH_TOKEN`（未设置或为空将拒绝启动）。详细部署说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
@@ -422,7 +436,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
 ### 测试与离线验证门
 
 ```bash
-bash scripts/verify.sh          # 运行全部 269 个单元测试 + 离线端到端 demo（无需网络与 API Key）
+bash scripts/verify.sh          # 运行全部 354 个单元测试 + 离线端到端 demo（无需网络与 API Key）
 bash scripts/dev.sh test        # 仅运行单元测试
 bash scripts/dev.sh doctor      # 运行环境自检
 ```
@@ -449,7 +463,7 @@ ARIA-X/
 │   ├── report/                # Markdown / HTML / findings.json 报告渲染器
 │   ├── server/                # ThreadingHTTPServer REST API 与 SSE 服务端
 │   └── web/                   # 零 CDN 本地控制台前端（HTML/CSS/JS）
-├── tests/                     # 269 个单元与集成测试
+├── tests/                     # 354 个单元与集成测试
 ├── examples/                  # 本机离线教学靶场、演示配置与确定性剧本
 ├── configs/                   # 配置文件模板
 └── docs/                      # 架构、融合映射、工具手册、安全模型、部署与路线图
@@ -525,5 +539,5 @@ ARIA-X 将 **ARTEX、Cairn 与 PentAGI** 的架构思想整合到独立的 Pytho
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.2.1 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · 仅限本地隔离环境学习与研究</sub>
+  <sub>ARIA-X v0.3.0 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · 仅限本地隔离环境学习与研究</sub>
 </p>

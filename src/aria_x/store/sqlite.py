@@ -188,6 +188,27 @@ class Store:
             c.execute(f"UPDATE runs SET {', '.join(sets)} WHERE id=?", params)
         return self.get_run(run_id)
 
+    def latest_resumable_run(
+        self,
+        project_id: str | None = None,
+        *,
+        statuses: Sequence[str] = ("running", "failed", "interrupted", "budget"),
+    ) -> Run | None:
+        """Return the most recent run that a no-argument resume may pick up.
+
+        ``cancelled`` is deliberately excluded: it is a deliberate stop by the
+        operator, so resuming it needs an explicit run id.
+        """
+        allowed = tuple(dict.fromkeys(str(s) for s in statuses))
+        placeholders = ",".join("?" for _ in allowed)
+        rows = self._all(
+            f"SELECT * FROM runs WHERE status IN ({placeholders})"
+            + (" AND project_id=?" if project_id else "")
+            + " ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            (*allowed, *( [project_id] if project_id else [] )),
+        )
+        return Run.from_row(rows[0]) if rows else None
+
     def list_runs(self, project_id: str | None = None, limit: int = 50) -> list[Run]:
         if project_id:
             rows = self._all("SELECT * FROM runs WHERE project_id=? ORDER BY started_at DESC LIMIT ?",
@@ -349,6 +370,17 @@ class Store:
         with self._tx() as c:
             c.execute("INSERT OR IGNORE INTO anchors(node_id,asset_id,note,created_at) VALUES(?,?,?,?)",
                       (node_id, asset_id, note, now_iso()))
+
+    def list_anchors(self, project_id: str, *, limit: int = 100000) -> list[dict[str, Any]]:
+        """Return node->asset anchor edges for a project (used by reports)."""
+        rows = self._all(
+            "SELECT an.node_id, an.asset_id, an.note FROM anchors an "
+            "JOIN assets a ON a.id = an.asset_id WHERE a.project_id = ? "
+            "ORDER BY an.node_id, an.asset_id LIMIT ?",
+            (project_id, limit),
+        )
+        return [{"node_id": r["node_id"], "asset_id": r["asset_id"], "note": r["note"] or ""}
+                for r in rows]
 
     def anchors_for_node(self, node_id: str) -> list[Asset]:
         rows = self._all("SELECT a.* FROM anchors an JOIN assets a ON a.id=an.asset_id WHERE an.node_id=?",
@@ -642,6 +674,7 @@ class Store:
             "nodes": [n.to_dict() for n in self.list_nodes(project_id, limit=100000)],
             "edges": [e.to_dict() for e in self.list_edges(project_id, limit=100000)],
             "assets": [a.to_dict() for a in self.list_assets(project_id, limit=100000)],
+            "anchors": self.list_anchors(project_id),
             "todos": [t.to_dict() for t in self.list_todos(project_id)],
             "findings": [n.to_dict() for n in self.list_nodes(project_id, kind="finding", limit=100000)],
             "traces": [t.to_dict() for t in self.list_traces(project_id, limit=100000)],

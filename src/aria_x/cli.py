@@ -72,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", help="override llm.model")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--json", action="store_true", help="print the result as JSON")
+    p.add_argument("--resume", nargs="?", const="latest", default=None, metavar="RUN_ID",
+                   help="resume an unfinished run (omit RUN_ID for the latest one)")
 
     p = sub.add_parser("serve", help="start the web console", parents=[common])
     p.add_argument("--host", help="bind host (default 127.0.0.1)")
@@ -184,11 +186,12 @@ class EventPrinter:
         "task.started": "→", "task.finished": "✓", "task.failed": "✗",
         "finding.created": "★", "asset.found": "◇", "node.created": "·",
         "todo.updated": "☑", "report.ready": "⤓", "budget": "…", "error": "!",
-        "approval.requested": "?", "hint": "✎",
+        "approval.requested": "?", "hint": "✎", "llm_delta": "…",
     }
 
     def __init__(self, bus: EventBus, *, verbose: bool = False, quiet: bool = False) -> None:
         self.bus = bus
+        self._stream_open = False
         self.verbose = verbose
         self.quiet = quiet
         self.sub = bus.subscribe(maxsize=1000)
@@ -202,6 +205,13 @@ class EventPrinter:
             if event is not None:
                 self.render(event)
 
+    def _clear_stream_line(self) -> None:
+        if getattr(self, "_stream_open", False):
+            if sys.stdout.isatty():
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+            self._stream_open = False
+
     def render(self, event: Event) -> None:
         if self.quiet:
             return
@@ -210,9 +220,20 @@ class EventPrinter:
             return
         if event.type in {"llm.call", "tool.call"} and not self.verbose:
             return
+        if event.type == "llm_delta":
+            # One rewriting line instead of a line per token, only on a TTY.
+            if self.verbose:
+                print(f"  … {data.get('role', '')} streaming {data.get('chars', 0)} chars")
+            elif sys.stdout.isatty():
+                sys.stdout.write("\r\033[K  … streaming "
+                                 f"{data.get('chars', 0)} chars ({data.get('role', '')})")
+                sys.stdout.flush()
+                self._stream_open = True
+            return
         icon = self.ICONS.get(event.type, "·")
         line = self._describe(event.type, data)
         if line:
+            self._clear_stream_line()
             print(f"  {icon} {line}")
 
     def _describe(self, type_: str, data: dict[str, Any]) -> str:
@@ -449,6 +470,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         from .engine import Engagement
         engagement = Engagement(config, store=store, events=bus,
                                 provider=_provider(config) if args.provider else None)
+        if args.resume:
+            run_id = None if args.resume == "latest" else str(args.resume)
+            print_banner(config)
+            print(f"  resuming: {run_id or 'latest unfinished run'}")
+            result = engagement.resume(run_id, project_id=args.project_id)
+            printer.stop()
+            if args.json:
+                print(json_dumps(result.to_dict() if hasattr(result, "to_dict") else result.__dict__,
+                                 indent=2, ensure_ascii=False))
+            else:
+                print()
+                print(f"[aria-x] status={result.status} run={result.run_id} (resumed)")
+                if result.report_path:
+                    print(f"[aria-x] report: {result.report_path}")
+                if result.error:
+                    print(f"[aria-x] error: {result.error}", file=sys.stderr)
+            return 0 if result.ok else 1
         if args.project_id:
             project = store.get_project(args.project_id)
             goal = args.goal or project.goal
@@ -527,6 +565,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         config = load_config(args)
         check("config", True, f"provider={config.llm.provider} model={config.llm.model}")
+        unknown_keys = list(getattr(config, "unknown_keys", []) or [])
+        if unknown_keys:
+            shown = ", ".join(unknown_keys[:6])
+            more = f" (+{len(unknown_keys) - 6} more)" if len(unknown_keys) > 6 else ""
+            check("config-keys", True, f"{len(unknown_keys)} unused",
+                  warning="config keys this version does not implement are ignored: "
+                          f"{shown}{more}")
     except AriaXError as exc:
         check("config", False, str(exc))
         config = AriaXConfig()

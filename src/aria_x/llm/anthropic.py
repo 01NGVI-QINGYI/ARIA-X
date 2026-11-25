@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import urllib.error
@@ -27,6 +28,83 @@ class AnthropicProvider:
         self.timeout = timeout
         self.extra_headers = dict(extra_headers or {})
         self.extra_body = dict(extra_body or {})
+
+    def supports_stream(self, tools: Any) -> bool:
+        """Streaming is used only for plain text calls (tool deltas are not parsed)."""
+        return not tools
+
+    def chat_stream(self, messages, tools=None, *, on_delta, temperature=None,
+                    max_tokens=None, json_mode=False, **kwargs):
+        """Stream assistant text as SSE ``content_block_delta`` events."""
+        system_parts = [m.content for m in messages if m.role == "system" and m.content]
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": _convert_messages([m for m in messages if m.role != "system"]),
+            "max_tokens": int(max_tokens or 4096),
+            "stream": True,
+        }
+        if system_parts:
+            payload["system"] = "\n\n".join(system_parts)
+        if temperature is not None:
+            payload["temperature"] = temperature
+        payload.update(self.extra_body)
+        headers = {"Content-Type": "application/json", "Accept": "text/event-stream",
+                   "anthropic-version": self.anthropic_version}
+        if self.api_key:
+            headers["x-api-key"] = self.api_key
+        headers.update(self.extra_headers)
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(self.endpoint(), data=data, headers=headers, method="POST")
+        collected: list[str] = []
+        finish = ""
+        prompt_tokens = completion_tokens = 0
+        saw_event = False
+        saw_stop = False
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    try:
+                        obj = json.loads(line[5:].strip())
+                    except ValueError:
+                        continue
+                    saw_event = True
+                    kind = obj.get("type")
+                    if kind == "content_block_delta":
+                        piece = (obj.get("delta") or {}).get("text")
+                        if piece:
+                            collected.append(piece)
+                            on_delta(piece)
+                    elif kind == "message_delta":
+                        finish = (obj.get("delta") or {}).get("stop_reason") or finish
+                        usage = obj.get("usage") or {}
+                        completion_tokens = int(usage.get("output_tokens") or completion_tokens)
+                    elif kind == "message_start":
+                        usage = ((obj.get("message") or {}).get("usage") or {})
+                        prompt_tokens = int(usage.get("input_tokens") or prompt_tokens)
+                    elif kind == "message_stop":
+                        saw_stop = True
+                    elif kind == "error":
+                        raise LLMError(f"provider error: {obj.get('error')!r}", retryable=False)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:400]
+            raise LLMError(f"provider returned HTTP {exc.code}", status=exc.code,
+                           retryable=exc.code in _RETRYABLE_STATUS, details={"body": detail}) from exc
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+                OSError) as exc:
+            raise LLMError(f"stream interrupted: {exc}", retryable=True) from exc
+        if not saw_event:
+            raise LLMError("provider did not return an SSE stream", retryable=True)
+        if not saw_stop:
+            raise LLMError("stream ended before completion marker", retryable=True)
+        return LLMResponse(
+            content="".join(collected), tool_calls=[],
+            model=self.model, finish_reason=finish or "end_turn",
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
+            raw={"streamed": True},
+        )
 
     def endpoint(self) -> str:
         if self.base_url.endswith("/v1/messages"):

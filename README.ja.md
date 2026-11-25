@@ -22,7 +22,7 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-orange">
 </p>
 
 ---
@@ -41,7 +41,39 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
 
 詳細な出典と設計上の相違点は [NOTICE.md](NOTICE.md)、[THIRD_PARTY.md](THIRD_PARTY.md)、[docs/FUSION.md](docs/FUSION.md) を参照してください。
 
-## 主な機能（v0.2.1）
+### 設計系譜と統合図
+
+<div align="center">
+
+```mermaid
+flowchart LR
+    subgraph UP["上流の設計思想"]
+        C["Cairn (AGPL-3.0)<br/>Fact/Intent 黒板<br/>OODA 推論ループ<br/>状態空間探索"]
+        A["ARTEX (AGPL-3.0)<br/>デュアルグラフ<br/>Planner 単一意図<br/>Todo と承認ゲート"]
+        P["PentAGI (MIT)<br/>専門ロール委任<br/>LLM ルータ抽象<br/>隔離実行と記憶"]
+    end
+
+    subgraph CORE["ARIA-X コア層"]
+        ST["統合状態層<br/>store/ (SQLite)<br/>15 表 WAL 永続化<br/>探索・資産グラフ"]
+        OR["統合制御層<br/>engine/ ループ<br/>4次元予算と Todo<br/>排他ロックと再開"]
+        EX["制御実行層<br/>agents · tools · llm<br/>27 ツールと隔離<br/>Scope + DNS 固定"]
+    end
+
+    OUT(["再現可能な成果物<br/>report · server · web<br/>証拠付きレポート<br/>監査 + SSE 画面"])
+
+    C --> ST
+    C --> OR
+    A --> ST
+    A --> OR
+    P --> EX
+    ST --> OUT
+    OR --> OUT
+    EX --> OUT
+```
+
+</div>
+
+## 主な機能（v0.3.0）
 
 - **デュアルグラフによる状態管理**：探索ノード・エッジと資産・アンカーを SQLite に保存し、事実・仮説・発見事項を追跡します。
 - **実行予算に基づく自律的な探索**：`bootstrap → reason → dispatch → explore → persist → report` の処理を、時間・モデル呼び出し・トークン・ツール呼び出しなどの予算と空転検出で制御します。
@@ -59,13 +91,26 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
   <img src="assets/architecture.svg" alt="ARIA-X のアーキテクチャ" width="100%">
 </p>
 
-```text
-Bootstrap → Reason (Planner) → Dispatch → Explore (Workers)
-                   ↑                          ↓
-               次の探索 ← Persist (SQLite / audit)
-                                             ↓
-                                  Report (MD / HTML / JSON)
+<div align="center">
+
+```mermaid
+flowchart LR
+    BOOT["1. bootstrap<br/>初期事実収集"]
+    RSN["2. reason<br/>Intent 生成"]
+    DSP["3. dispatch<br/>並列タスク起動"]
+    WRK["4. worker<br/>制御ツール検証"]
+    PST["5. persist<br/>状態・証拠保存"]
+    RPT(["6. report<br/>レポート出力"])
+
+    BOOT --> RSN
+    RSN --> DSP
+    DSP --> WRK
+    WRK --> PST
+    PST -->|"次ラウンド"| RSN
+    PST -->|"完了 / 上限"| RPT
 ```
+
+予算・タイムアウト・アイドル判定が次ラウンドか収束かを決め、`persist` で JSONL イベントと監査記録も書き出します。
 
 ツール実行は ToolRegistry に集約され、対象範囲の確認、リスクに応じた承認、監査が行われます。詳しくは [アーキテクチャ](docs/ARCHITECTURE.md) と [安全モデル](docs/SECURITY.md) を参照してください。
 
@@ -153,7 +198,7 @@ ARIA-X は、対象 Scope、承認ゲート、コマンドポリシー、監査�
 **現行バージョンの設計範囲**：
 - **証拠を伴う推論**：モデルによる探索と、ツール出力に基づく検証を組み合わせます。複雑な結論は研究者による確認を前提とします。
 - **段階的な実行制御**：`CommandPolicy` はヒューリスティックなフィルタリングを担当します。プロセス隔離には Docker バックエンドを利用でき、サンプル設定および `aria-x init` が生成するテンプレートでは `sandbox.network = "none"` を既定とします（コード内蔵の `SandboxConfig` の既定値は `"bridge"`）。また、`docker/docker-compose.yml` を使用する場合は空でない `ARIA_X_AUTH_TOKEN` の明示的な設定が必須です（詳細は [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) を参照）。
-- **ローカル研究への最適化**：SQLite WAL による状態管理を採用しています。分散クラスタ実行、専用の Prompt Injection 分類器、クラッシュ後の途中再開は今後の開発課題です。
+- **ローカル研究への最適化**：SQLite WAL による状態管理を採用しています。分散クラスタ実行と専用の Prompt Injection 分類器は今後の開発課題です。中断・予算超過した実行は `aria-x run --resume` で再開できます。
 
 **利用範囲**：本プロジェクトは完全に隔離されたローカル実験環境での学習、研究、原理検証を対象とします。オンラインサービスやネットワークシステムに対するスキャン・侵入テストには、所有権や許可の有無にかかわらず使用しないでください。詳細は [利用条件](README.en.md#license--usage-boundaries) と [セキュリティモデル](docs/SECURITY.md) を参照してください。
 
@@ -167,7 +212,7 @@ ARIA-X は、対象 Scope、承認ゲート、コマンドポリシー、監査�
 | [docs/SECURITY.md](docs/SECURITY.md) | 技術的な安全制御と制限 |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 導入と実行環境 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | 実装済み機能と今後の予定 |
-| [CHANGELOG.md](CHANGELOG.md) | v0.2.1 の変更履歴（セキュリティ強化・SSE 認証移行・三言語対応など） |
+| [CHANGELOG.md](CHANGELOG.md) | v0.3.0 の変更履歴（セキュリティ強化・SSE 認証移行・三言語対応など） |
 
 ## ライセンスと謝辞
 
@@ -176,5 +221,5 @@ ARIA-X は **AGPL-3.0-or-later** で公開されています。詳細は [LICENS
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.2.1 · AGPL-3.0-or-later · 01NGVI-QINGYI · ローカルの隔離環境での学習・研究向け</sub>
+  <sub>ARIA-X v0.3.0 · AGPL-3.0-or-later · 01NGVI-QINGYI · ローカルの隔離環境での学習・研究向け</sub>
 </p>

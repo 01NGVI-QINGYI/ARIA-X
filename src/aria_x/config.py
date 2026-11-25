@@ -36,6 +36,9 @@ except ModuleNotFoundError:  # pragma: no cover - only on older interpreters
     _toml = None
 
 _REDACTED_SENTINEL = "***"
+
+# Fields that hold derived/runtime state and must never be loaded from a file.
+_INTERNAL_FIELDS = frozenset({"unknown_keys"})
 _REDACTED_EXPORT_KEY = "_redacted_export"
 
 
@@ -138,16 +141,10 @@ class ServerConfig:
 @dataclass(slots=True)
 class EngineConfig:
     bootstrap: bool = True
-    reason_on_change: bool = True
     max_idle_rounds: int = 2
     retry_failed_tasks: int = 1
     require_finding_for_completion: bool = False
     language: str = "zh"
-    planner_role: str = "planner"
-    worker_role: str = "worker"
-    specialist_role: str = "specialist"
-    skills_dir: str = "skills"
-    prompts_dir: str = "prompts"
 
 
 @dataclass(slots=True)
@@ -155,6 +152,9 @@ class AriaXConfig:
     name: str = "ARIA-X engagement"
     data_dir: str = "data"
     runs_dir: str = "runs"
+    # Keys present in a config file that this version does not implement.
+    # Surfaced by ``aria-x doctor`` instead of being dropped silently.
+    unknown_keys: list[str] = field(default_factory=list)
     log_level: str = "INFO"
     llm: LLMConfig = field(default_factory=LLMConfig)
     budget: BudgetConfig = field(default_factory=BudgetConfig)
@@ -197,9 +197,14 @@ class AriaXConfig:
                 section = getattr(cfg, key)
                 if not isinstance(value, Mapping):
                     raise ConfigError(f"config section '{key}' must be a table/object")
-                _apply_section(section, value)
+                unknown = _apply_section(section, value)
+                cfg.unknown_keys.extend(f"{key}.{name}" for name in unknown)
+            elif key in _INTERNAL_FIELDS:
+                continue  # derived state, never read from a config file
             elif hasattr(cfg, key):
                 setattr(cfg, key, value)
+            else:
+                cfg.unknown_keys.append(str(key))
         return cfg
 
     def merge(self, raw: Mapping[str, Any]) -> None:
@@ -207,9 +212,14 @@ class AriaXConfig:
             if value is None:
                 continue
             if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine"} and isinstance(value, Mapping):
-                _apply_section(getattr(self, key), value)
+                unknown = _apply_section(getattr(self, key), value)
+                self.unknown_keys.extend(f"{key}.{name}" for name in unknown)
+            elif key in _INTERNAL_FIELDS:
+                continue
             elif hasattr(self, key):
                 setattr(self, key, value)
+            else:
+                self.unknown_keys.append(str(key))
 
     def apply_env(self, env: Mapping[str, str]) -> None:
         if env.get("ARIA_X_PROVIDER"):
@@ -338,16 +348,10 @@ class AriaXConfig:
             },
             "engine": {
                 "bootstrap": bool(self.engine.bootstrap),
-                "reason_on_change": bool(self.engine.reason_on_change),
                 "max_idle_rounds": self.engine.max_idle_rounds,
                 "retry_failed_tasks": self.engine.retry_failed_tasks,
                 "require_finding_for_completion": bool(self.engine.require_finding_for_completion),
                 "language": str(self.engine.language),
-                "planner_role": str(self.engine.planner_role),
-                "worker_role": str(self.engine.worker_role),
-                "specialist_role": str(self.engine.specialist_role),
-                "skills_dir": str(self.engine.skills_dir),
-                "prompts_dir": str(self.engine.prompts_dir),
             },
         }
 
@@ -508,15 +512,19 @@ def _has_nonempty_auth_header(headers: Mapping[str, Any] | None) -> bool:
     return False
 
 
-def _apply_section(section: Any, values: Mapping[str, Any]) -> None:
+def _apply_section(section: Any, values: Mapping[str, Any]) -> list[str]:
+    """Apply known keys and return the names of keys this section does not have."""
+    unknown: list[str] = []
     for key, value in values.items():
         if not hasattr(section, key):
+            unknown.append(key)
             continue
         current = getattr(section, key)
         if key == "ports" or key == "targets" or key == "deny" or key == "extra_args":
             setattr(section, key, _coerce(value, current))
         else:
             setattr(section, key, _coerce(value, current))
+    return unknown
 
 
 def _find_config(path: str | Path | None) -> Path | None:

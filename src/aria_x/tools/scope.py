@@ -17,6 +17,7 @@ Every network-capable tool calls :meth:`Scope.require_url` or
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 import posixpath
 import re
 import socket
@@ -31,6 +32,59 @@ from ..errors import ScopeViolation
 
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
+
+# --- non-HTTP target extraction ------------------------------------------------
+# ``terminal_exec`` is a free-form shell. Extract the host each shell command
+# would contact, one sub-command at a time. Two failure modes matter equally:
+# missing a real target (a bypass) and mistaking a local file name for a host
+# (a false positive that blocks legitimate work such as ``scp ... loot.txt``).
+
+_SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&]")
+_URI = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/\s]*@)?([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})")
+_UNC = re.compile(r"//([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?:[/\\s:]|$)")
+_FQDN = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b")
+_USER_HOST = re.compile(r"(?:^|[\s:])([A-Za-z0-9._%+-]+)@([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})")
+_HOST_FLAG_EQ = re.compile(r"(?:--host|--hostname)=([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})", re.I)
+_HOST_FLAG_SPACE = re.compile(r"(?:^|\s)(?:-h|--host|--hostname)\s+([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?=\s|$|:)")
+_HOST_SHORT_JOINED = re.compile(r"(?:^|\s)-h([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?=\s|$)")
+_HOST_PORT = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,63}):(\d{1,5})\b")
+
+# Tools whose first positional argument is the remote host.
+_SSH_FAMILY = frozenset({"ssh", "scp", "sftp", "rsync", "mosh", "autossh", "telnet"})
+_HOST_SLOT = frozenset({
+    "nc", "ncat", "netcat", "socat", "dig", "host", "nslookup", "ping", "ping6",
+    "traceroute", "tracepath", "whois", "ftp", "lftp", "smbclient", "smbmap",
+    "rpcclient", "enum4linux", "enum4linux-ng", "crackmapexec", "netexec", "nxc",
+    "snmpwalk", "snmpget", "snmpbulkwalk", "ldapsearch", "ldapwhoami", "ssh-keyscan",
+})
+# Tools that take a target anywhere in their argument list.
+_SCAN_FAMILY = frozenset({
+    "nmap", "masscan", "nikto", "hydra", "medusa", "curl", "wget", "nuclei",
+    "gobuster", "ffuf", "dirb", "dirsearch", "wfuzz", "whatweb", "sslyze",
+    "testssl", "testssl.sh", "amass", "subfinder", "dnsx", "httpx", "tlsx",
+    "bloodhound-python", "certipy", "impacket-secretsdump", "impacket-psexec",
+    "impacket-wmiexec", "wmiexec.py", "psexec.py", "atexec.py", "smbexec.py",
+})
+_DB_FAMILY = frozenset({"mysql", "mariadb", "psql", "sqlcmd", "sqlplus",
+                        "redis-cli", "mongosh", "mongo"})
+_GIT_REMOTE_SUBCOMMANDS = frozenset({
+    "clone", "push", "pull", "fetch", "ls-remote", "remote", "submodule", "archive",
+})
+# Flags that consume the next token, so the value is not mistaken for the host.
+_VALUE_FLAGS = frozenset({
+    "-p", "-P", "-l", "-i", "-o", "-F", "-J", "-c", "-e", "-b", "-D", "-L", "-R",
+    "-W", "-m", "-O", "-Q", "-S", "-w", "-E", "-u", "-C", "-n", "-t", "-s", "-A",
+    "--port", "--user", "--password", "--identity", "--config", "--output",
+    "--timeout", "--rate", "--proxy", "--header", "--data", "--cookie",
+})
+_NON_HOST_SUFFIXES = frozenset({
+    "txt", "json", "sql", "py", "sh", "conf", "log", "md", "csv", "xml", "yml", "yaml",
+    "zip", "tar", "gz", "tgz", "bin", "pem", "key", "crt", "cer", "pcap", "html", "htm",
+    "js", "css", "png", "jpg", "jpeg", "gif", "pdf", "docx", "xlsx", "pptx", "db",
+    "sqlite", "bak", "old", "tmp", "lock", "cfg", "ini", "env", "sock", "pid", "toml",
+    "war", "jar", "php", "rb", "pl", "c", "h", "o", "so", "dylib", "exe", "dll",
+})
+_MAX_COMMAND_HOSTS = 64
 
 
 @dataclass(slots=True)
@@ -68,6 +122,61 @@ class _HostRule:
 
 _ENCODED_TRAVERSAL = re.compile(r"%(?:2e|2f|5c|00)", re.I)
 _BAD_PERCENT = re.compile(r"%(?![0-9a-fA-F]{2})")
+
+
+_TOOLS_ALL = (_SSH_FAMILY | _HOST_SLOT | _SCAN_FAMILY | _DB_FAMILY)
+
+
+def _locate_network_tool(tokens: list[str]) -> tuple[str, list[str]]:
+    """Find the first real command in a segment, skipping wrappers and assignments."""
+    for index, token in enumerate(tokens):
+        base = token.rsplit("/", 1)[-1]
+        if base in _TOOLS_ALL or base.startswith("impacket-"):
+            return base, tokens[index + 1:]
+        if base == "git":
+            # ``git -C /path clone ...`` puts options before the subcommand.
+            rest = tokens[index + 1:]
+            if any(tok in _GIT_REMOTE_SUBCOMMANDS for tok in rest):
+                return "git", rest
+            return "", []
+    return "", []
+
+
+def _host_slot(args: list[str]) -> str:
+    """Return the first positional argument, honouring flags that take a value."""
+    skip_next = False
+    for token in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("-"):
+            if token in _VALUE_FLAGS:
+                skip_next = True
+            continue
+        if token.isdigit():
+            continue
+        return token
+    return ""
+
+
+def _split_host_token(token: str) -> tuple[str, int | None]:
+    """Split ``user@host[:port][/path]`` or ``host:port`` into (host, port)."""
+    text = str(token or "").strip().strip(",")
+    if "://" in text:
+        try:
+            text = urlsplit(text).netloc or text
+        except ValueError:
+            return "", None
+    if "@" in text:
+        text = text.rsplit("@", 1)[1]
+    port: int | None = None
+    if ":" in text:
+        head, tail = text.rsplit(":", 1)
+        if tail.isdigit():
+            text, port = head, int(tail)
+        else:
+            text = text.split(":", 1)[0]
+    return text.split("/", 1)[0].strip("[]"), port
 
 
 def _has_control_chars(value: str) -> bool:
@@ -136,9 +245,17 @@ class _UrlRule:
 
 
 class Scope:
+    """Authorization engine: host/net/URL rules, deny lists and rate limiting.
+
+    Resolved addresses are recorded in ``_pinned`` so the HTTP/TLS layer can
+    contact exactly the address that was authorized (see ``tools.dnspin``).
+    """
+
     def __init__(self, config: ScopeConfig, *, allow_public_targets: bool = True) -> None:
         self.config = config
         self.allow_public_targets = bool(allow_public_targets)
+        self._pinned: dict[str, str] = {}
+        self._pinned_lock = threading.Lock()
         self.host_rules: list[_HostRule] = []
         self.net_rules: list[ipaddress._BaseNetwork] = []
         self.url_rules: list[_UrlRule] = []
@@ -234,11 +351,13 @@ class Scope:
         if not decision.allowed:
             return decision
         if self._matches_host_or_net(decision.host, port, decision.ips):
+            self._pin_authorized_address(decision.host, port, decision.ips)
             return Decision(True, "in scope", url, decision.host, port, decision.ips)
         path_reason = ""
         for rule in self.url_rules:
             matched, rule_reason = rule.check(scheme, decision.host, port, path)
             if matched:
+                self._pin_authorized_address(decision.host, port, decision.ips)
                 return Decision(True, "in scope", url, decision.host, port, decision.ips)
             if rule_reason and not path_reason:
                 path_reason = rule_reason
@@ -256,6 +375,7 @@ class Scope:
         if self._matches_host_or_net(decision.host, port, decision.ips) or any(
             rule.host_rule.matches(decision.host, port) for rule in self.url_rules
         ):
+            self._pin_authorized_address(decision.host, port, decision.ips)
             return Decision(True, "in scope", eff_target, decision.host, port, decision.ips)
         return Decision(False, "target is not in scope", eff_target, decision.host, port, decision.ips)
 
@@ -317,6 +437,47 @@ class Scope:
 
         return Decision(True, "", target, host, port, ips)
 
+    def approved_address(self, host: str, port: int | None, ips: Sequence[str]) -> str:
+        """Return the address this authorization approves for *host*.
+
+        When an explicit CIDR rule is declared, an address inside it wins: the
+        operator's network statement is the narrower claim about which machine
+        is theirs. Otherwise the first address that passed the deny/type checks.
+        """
+        if not ips:
+            return ""
+        candidates: list[str] = []
+        for ip_text in ips:
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                continue
+            if any(ip in net for net in self.deny_nets):
+                continue
+            candidates.append(str(ip))
+        if not candidates:
+            return ""
+        for text in candidates:
+            ip = ipaddress.ip_address(text)
+            if any(ip in net for net in self.net_rules):
+                return text
+        return candidates[0]
+
+    def _pin_authorized_address(self, host: str, port: int | None, ips: Sequence[str]) -> None:
+        """Record the address that *this* authorization approved.
+
+        Called only after every rule has passed, so a denied resolution can
+        never be pinned. When a CIDR rule is what matched, the recorded address
+        is the one inside that rule (not blindly ``ips[0]``), which keeps the
+        pin and the decision consistent.
+        """
+        if not host or not ips:
+            return
+        chosen = self.approved_address(host, port, ips)
+        if chosen:
+            with self._pinned_lock:
+                self._pinned[host] = chosen
+
     def _matches_host_or_net(self, host: str, port: int | None, ips: Sequence[str]) -> bool:
         for rule in self.host_rules:
             if rule.matches(host, port):
@@ -342,11 +503,12 @@ class Scope:
         boundary for terminal work. We only flag literal IPs and URLs, which
         catches the common accidental ``nmap 8.8.8.8`` mistake.
         """
-        for url in _URL.findall(command or ""):
+        text = command or ""
+        for url in _URL.findall(text):
             decision = self.authorize_url(url)
             if not decision.allowed:
                 return decision
-        for match in _IPV4.findall(command or ""):
+        for match in _IPV4.findall(text):
             try:
                 ip = ipaddress.ip_address(match)
             except ValueError:
@@ -354,7 +516,103 @@ class Scope:
             decision = self.authorize_host(str(ip), None, target=str(ip))
             if not decision.allowed:
                 return decision
+        for host, port in self._command_host_candidates(text):
+            decision = self.authorize_host(host, port, target=host)
+            if not decision.allowed:
+                return decision
         return Decision(True, "no explicit out-of-scope literal found", command)
+
+    def _command_host_candidates(self, command: str) -> list[tuple[str, int | None]]:
+        """Extract hostnames a shell command would contact, one sub-command at a time.
+
+        Handles chained commands (``&&``/``;``/``|``), common wrappers
+        (``sudo``/``timeout``/``sshpass``/``proxychains``/``env``), ``user@host``,
+        ``-h``/``--host[=]``/``-hHOST`` flags, UNC shares and any ``scheme://`` URI.
+
+        For commands whose host is positional (ssh/scp/rsync/nc/dig/...), only the
+        host slot is inspected, so a local file name (``loot.txt``) can never be
+        mistaken for a target. Returns at most ``_MAX_COMMAND_HOSTS`` unique hosts.
+        """
+        found: list[tuple[str, int | None]] = []
+
+        def add(host: str, port: int | None = None) -> None:
+            host = (host or "").strip().strip(".").lower()
+            if not host or host in {"localhost", "localhost.localdomain"}:
+                return
+            if host.endswith(".local") or host.endswith(".localhost"):
+                return
+            try:
+                ipaddress.ip_address(host)
+                return  # IP literals are handled by the caller
+            except ValueError:
+                pass
+            if not _FQDN.fullmatch(host):
+                return
+            if "." in host and host.rsplit(".", 1)[1] in _NON_HOST_SUFFIXES:
+                return  # loot.txt, dump.sql, config.json, ...
+            if Path(host).exists():
+                return  # a real local file
+            if port is not None and not (0 < port <= 65535):
+                port = None
+            if (host, port) not in found:
+                found.append((host, port))
+
+        for match in _URI.findall(command):
+            add(match)
+        for match in _UNC.findall(command):
+            add(match)
+        for match in _HOST_FLAG_EQ.findall(command):
+            add(match)
+        for match in _HOST_SHORT_JOINED.findall(command):
+            add(match)
+
+        for segment in _SEGMENT_SPLIT.split(command or ""):
+            tokens = segment.split()
+            if not tokens:
+                continue
+            tool, args = _locate_network_tool(tokens)
+            if not tool:
+                continue
+            if tool in _SSH_FAMILY:
+                # Only the host slot: trailing arguments are remote commands or
+                # local file names (``ssh h cat x.json``, ``scp h:loot.txt loot.txt``).
+                slot = _host_slot(args)
+                if slot:
+                    host, port = _split_host_token(slot)
+                    add(host, port)
+                for user_host in _USER_HOST.findall(segment):
+                    add(user_host[1])
+            elif tool in _HOST_SLOT:
+                slot = _host_slot(args)
+                if slot:
+                    host, port = _split_host_token(slot)
+                    add(host, port)
+                # Some take a protocol first (``crackmapexec smb host``); the
+                # suffix/exists filters keep local file names out.
+                for token in args:
+                    if token.startswith("-") or token.isdigit():
+                        continue
+                    host, port = _split_host_token(token)
+                    add(host, port)
+            else:
+                for match in _USER_HOST.findall(segment):
+                    add(match[1])
+                for match in _HOST_FLAG_SPACE.findall(segment):
+                    add(match)
+                for match in _HOST_PORT.findall(segment):
+                    add(match[0], int(match[1]) if match[1].isdigit() else None)
+                if tool in _SCAN_FAMILY or tool in _DB_FAMILY:
+                    for token in args:
+                        if token.startswith("-"):
+                            continue
+                        host, port = _split_host_token(token)
+                        add(host, port)
+        return found[:_MAX_COMMAND_HOSTS]
+
+    def pinned_addresses(self) -> dict[str, str]:
+        """Return the recorded host -> address map for the current engagement."""
+        with self._pinned_lock:
+            return dict(self._pinned)
 
     def acquire_slot(self, host: str) -> None:
         self._limiter.acquire(host)

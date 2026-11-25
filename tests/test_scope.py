@@ -200,3 +200,114 @@ class RateLimiterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class CommandHostExtractionTests(unittest.TestCase):
+    """Non-IP hostnames in a shell command must reach the scope engine."""
+
+    def _scope(self, **kwargs):
+        base = dict(authorized=True, targets=["10.0.0.5", "*.lab.test"],
+                    allow_private=True, allow_loopback=True, max_rps=1000)
+        base.update(kwargs)
+        return Scope(ScopeConfig(**base), allow_public_targets=True)
+
+    def test_user_at_host_is_blocked_out_of_scope(self) -> None:
+        s = self._scope()
+        self.assertFalse(s.check_command("ssh root@evil.example.com").allowed)
+        self.assertTrue(s.check_command("ssh root@10.0.0.5").allowed)
+        self.assertTrue(s.check_command("ssh root@db.lab.test").allowed)
+
+    def test_unc_share_is_blocked_out_of_scope(self) -> None:
+        s = self._scope()
+        self.assertFalse(s.check_command("smbclient -L //evil.example.com/share").allowed)
+        self.assertTrue(s.check_command("smbclient -L //10.0.0.5/share").allowed)
+
+    def test_host_flag_and_db_clients(self) -> None:
+        s = self._scope()
+        self.assertFalse(s.check_command("mysql -h evil.example.com -u root").allowed)
+        self.assertTrue(s.check_command("mysql -h db.lab.test -u root").allowed)
+        self.assertFalse(s.check_command("psql -h evil.example.com -U p").allowed)
+
+    def test_positional_host_for_network_tools(self) -> None:
+        s = self._scope()
+        self.assertFalse(s.check_command("ssh evil.example.com").allowed)
+        self.assertFalse(s.check_command("crackmapexec smb evil.example.com").allowed)
+        self.assertTrue(s.check_command("ssh db.lab.test").allowed)
+
+    def test_git_only_checks_remote_subcommands(self) -> None:
+        s = self._scope()
+        self.assertFalse(s.check_command("git clone user@git.evil.example.com:repo").allowed)
+        # a commit message may contain an e-mail address and must not be flagged
+        self.assertTrue(s.check_command('git commit -m "mail admin@corp.example.com"').allowed)
+
+    def test_email_in_payload_is_not_a_target(self) -> None:
+        s = self._scope()
+        cmd = 'sqlmap --data "email=admin@corp.example.com" -u http://10.0.0.5/a'
+        self.assertTrue(s.check_command(cmd).allowed)
+
+    def test_plain_commands_pass(self) -> None:
+        s = self._scope()
+        for cmd in ("echo hello", "ls -la", "python3 -c 'print(1)'"):
+            self.assertTrue(s.check_command(cmd).allowed, cmd)
+
+class CommandHostBypassAndFalsePositiveTests(unittest.TestCase):
+    """Regression for both directions: real targets found, local files not blocked."""
+
+    def _scope(self):
+        return Scope(ScopeConfig(authorized=True, targets=["10.0.0.5", "*.lab.test"],
+                                 allow_private=True, allow_loopback=True, max_rps=1000),
+                     allow_public_targets=True)
+
+    def test_scanners_and_positional_hosts_are_found(self) -> None:
+        s = self._scope()
+        for cmd in (
+            "nmap -sV evil.example.com",
+            "nikto -h evil.example.com",
+            "nc evil.example.com 4444",
+            "dig evil.example.com A",
+            "ssh evil.example.com id",
+            "sudo nmap 8.8.8.8",
+            "proxychains4 nc evil.example.com 80",
+            "sshpass -p x ssh root@evil.example.com",
+        ):
+            self.assertFalse(s.check_command(cmd).allowed, cmd)
+
+    def test_chained_and_wrapped_commands_are_found(self) -> None:
+        s = self._scope()
+        for cmd in (
+            "timeout 5 ssh root@evil.example.com",
+            "echo ok && ssh root@evil.example.com",
+            "cat file.txt | xargs curl https://evil.example.com/x",
+            "git -C /tmp clone user@git.evil.example.com:repo",
+        ):
+            self.assertFalse(s.check_command(cmd).allowed, cmd)
+
+    def test_joined_and_equals_host_flags_are_found(self) -> None:
+        s = self._scope()
+        for cmd in ("mysql --host=evil.example.com -u r", "mysql -hevil.example.com -u r",
+                    "curl ftp://u:p@evil.example.com/f"):
+            self.assertFalse(s.check_command(cmd).allowed, cmd)
+
+    def test_local_file_names_are_not_blocked(self) -> None:
+        s = self._scope()
+        for cmd in (
+            "scp root@10.0.0.5:/tmp/loot.txt loot.txt",
+            "ssh root@10.0.0.5 cat config.json",
+            "rsync -av root@db.lab.test:/var/backup/ dump.sql",
+        ):
+            self.assertTrue(s.check_command(cmd).allowed, cmd)
+
+    def test_plain_text_with_host_port_is_not_a_target(self) -> None:
+        s = self._scope()
+        for cmd in ('grep -n "api.example.com:443" log.txt',
+                    'printf "db.internal:3306\\n"', "echo hello", "ls -la"):
+            self.assertTrue(s.check_command(cmd).allowed, cmd)
+
+    def test_payload_email_is_not_a_target(self) -> None:
+        s = self._scope()
+        cmd = 'sqlmap --data "email=admin@corp.example.com" -u http://10.0.0.5/a'
+        self.assertTrue(s.check_command(cmd).allowed)
+
+    def test_git_commit_message_is_not_a_target(self) -> None:
+        s = self._scope()
+        self.assertTrue(s.check_command('git commit -m "mail admin@corp.example.com"').allowed)
+        self.assertTrue(s.check_command("git -C /tmp status").allowed)

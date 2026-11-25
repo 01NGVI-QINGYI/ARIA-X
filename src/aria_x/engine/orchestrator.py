@@ -122,9 +122,14 @@ class Orchestrator:
     # public entry point
     # ------------------------------------------------------------------
 
-    def run(self, project: Project, run: Run, *, goal: str | None = None) -> RunOutcome:
-        """Execute the loop and always return a coherent :class:`RunOutcome`."""
-        self._prepare(project, run, goal=goal)
+    def run(self, project: Project, run: Run, *, goal: str | None = None,
+            resume: bool = False) -> RunOutcome:
+        """Execute the loop and always return a coherent :class:`RunOutcome`.
+
+        ``resume=True`` re-enters an existing run: bootstrap is skipped (its
+        nodes already exist) and the loop continues from persisted state.
+        """
+        self._prepare(project, run, goal=goal, resume=resume)
         status, summary, error = "completed", "", ""
         try:
             status, summary, error = self._loop()
@@ -162,9 +167,11 @@ class Orchestrator:
     # setup
     # ------------------------------------------------------------------
 
-    def _prepare(self, project: Project, run: Run, *, goal: str | None) -> None:
+    def _prepare(self, project: Project, run: Run, *, goal: str | None,
+                 resume: bool = False) -> None:
         self.project = project
         self.run_record = run
+        self._resuming = bool(resume)
         requested_goal = (goal or "").strip()
         if requested_goal and requested_goal != project.goal:
             try:
@@ -179,7 +186,13 @@ class Orchestrator:
         if project_scope.get("authorized") is False:
             raise ConfigError("refusing to start: project scope.authorized is false")
 
-        self.budget = Budget(self.config.budget)
+        # A resumed run continues the budget it already spent: elapsed time and
+        # the intent allowance come back from the persisted snapshot.
+        snapshot = dict(run.budget or {}) if resume else {}
+        self.budget = (Budget.from_snapshot(self.config.budget, snapshot)
+                       if resume else Budget(self.config.budget))
+        if resume:
+            self._restore_progress(run, snapshot_usage="usage" in snapshot)
         self.router = ModelRouter(self.config, budget=self.budget, events=self.events,
                                   project_id=project.id, run_id=run.id,
                                   provider=self.provider)
@@ -230,6 +243,48 @@ class Orchestrator:
             "bootstrap": bool(self.config.engine.bootstrap),
             "scope": scope_note(project_scope or self._scope_dict()),
         })
+
+    def _restore_progress(self, run: Run, *, snapshot_usage: bool = False) -> None:
+        """Carry persisted usage into the budget and unstick abandoned work.
+
+        A crashed process leaves ``status='active'`` intents that the scheduler
+        will never pick up again and ``status='running'`` tasks that look live.
+        Both are reset here, and the original usage is restored so the budget
+        keeps counting what was already spent.
+        """
+        usage = dict(getattr(run, "usage", None) or {})
+        # The budget snapshot and runs.usage hold the same numbers; merge only one
+        # of them or the resumed run counts its history twice.
+        if usage and not snapshot_usage and self.budget is not None \
+                and self.budget.usage is not None:
+            self.budget.usage.merge(usage)
+        project_id = getattr(self.project, "id", "")
+        try:
+            existing = self.store.list_nodes(project_id)
+        except Exception:
+            existing = []
+        self._intents_created = len([n for n in existing if getattr(n, "kind", "") == "intent"])
+        if self.budget is not None:
+            # Budget.check_intents() counts its own counter, not _intents_created.
+            self.budget.intents_started = max(self.budget.intents_started, self._intents_created)
+        for node in existing:
+            if getattr(node, "kind", "") != "intent":
+                continue
+            if getattr(node, "status", "") in {"active", "in_progress"}:
+                try:
+                    self.store.update_node(node.id, status="open")
+                except Exception:
+                    pass
+        try:
+            for task in self.store.list_tasks(run.id):
+                if getattr(task, "status", "") in {"running", "active"}:
+                    try:
+                        self.store.update_task(task.id, status="interrupted",
+                                               error="interrupted by process restart")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
     def _effective_scope(self, project_scope: Mapping[str, Any]) -> ScopeConfig:
         """Config scope is authoritative; project scope may only narrow it.
@@ -295,7 +350,7 @@ class Orchestrator:
 
     def _loop(self) -> tuple[str, str, str]:
         assert self.budget is not None
-        if self.config.engine.bootstrap:
+        if self.config.engine.bootstrap and not getattr(self, "_resuming", False):
             self._bootstrap_step()
             if self._goal_proven():
                 return "completed", self._completion_summary or "Goal proven during bootstrap.", ""
@@ -1289,7 +1344,7 @@ class Orchestrator:
 
 def _load_write_report() -> Callable[..., Any] | None:
     try:
-        from ..report.render import write_report
+        from ..report.render import attack_graph_svg, write_report
         return write_report
     except Exception:
         return None
@@ -1310,7 +1365,12 @@ def _fallback_report(run_dir: Path, export: Mapping[str, Any], meta: Mapping[str
     json_path = run_dir / "report.json"
     markdown_path.write_text(markdown, encoding="utf-8")
     title = f"ARIA-X Engagement Report — {meta.get('project_name') or meta.get('project_id') or 'engagement'}"
-    html_path.write_text(_markdown_to_html(markdown, title), encoding="utf-8")
+    try:  # the fallback must survive a broken primary renderer
+        from ..report.render import attack_graph_svg
+        graph_svg = attack_graph_svg(export)
+    except Exception:
+        graph_svg = ""
+    html_path.write_text(_markdown_to_html(markdown, title, graph_svg=graph_svg), encoding="utf-8")
     json_path.write_text(json_dumps(export, indent=2), encoding="utf-8")
     return {"markdown": str(markdown_path), "html": str(html_path), "json": str(json_path)}
 
@@ -1381,12 +1441,26 @@ def _fallback_markdown(export: Mapping[str, Any], meta: Mapping[str, Any]) -> st
     return "\n".join(lines)
 
 
-def _markdown_to_html(markdown: str, title: str) -> str:
+def _markdown_to_html(markdown: str, title: str, *, graph_svg: str = "") -> str:
     """Tiny, dependency-free Markdown subset renderer for the fallback report."""
     body: list[str] = []
     in_list = False
+    in_fence = False
+    fence_lang = ""
     for raw in markdown.splitlines():
         line = raw.rstrip()
+        if line.strip().startswith("```"):
+            if not in_fence:
+                in_fence = True
+                fence_lang = line.strip().lstrip("`").strip()
+                continue
+            if fence_lang == "mermaid" and graph_svg:
+                body.append(f'<figure class="attack-graph">{graph_svg}</figure>')
+            in_fence = False
+            fence_lang = ""
+            continue
+        if in_fence:
+            continue
         if line.startswith("### "):
             if in_list:
                 body.append("</ul>")

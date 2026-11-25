@@ -1,15 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="820" viewBox="0 0 1200 820" role="img"
      aria-labelledby="atitle adesc" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif">
   <title id="atitle">ARIA-X architecture</title>
-  <desc id="adesc">Web console and HTTP API above the engagement engine, which connects the blackboard store, planner and worker agents, tool layer, sandbox, LLM router and reports. Left side shows concept lineage from Cairn, ARTEX and PentAGI.</desc>
+  <desc id="adesc">Web console and HTTP API above the engagement engine, which connects the 15-table SQLite dual-graph store, planner and worker agents, model router, 27-tool layer, sandbox, and reports. Left side shows concept lineage from Cairn, ARTEX, and PentAGI.</desc>
   <defs>
     <linearGradient id="heen" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#0b1220"/><stop offset="1" stop-color="#0f172a"/>
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#0f172a"/>
     </linearGradient>
+    <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1,1.5 L8.5,5 L1,8.5 z" fill="#64748b"/>
+    </marker>
     <style>
-      .bg { fill: #0b1220; }
-      .box { fill: #131e33; stroke: #2b3b55; stroke-width: 1.5; rx: 14; }
+      .bg { fill: url(#heen); stroke: #334155; stroke-width: 2; }
+      .box { fill: #131e33; stroke: #2b3b55; stroke-width: 1.5; }
       .accent { fill: #10233b; stroke: #38bdf8; stroke-width: 2; }
       .engine { fill: #161f38; stroke: #818cf8; stroke-width: 2; }
       .store { fill: #10241f; stroke: #34d399; stroke-width: 2; }
@@ -17,96 +21,100 @@
       .t { fill: #e2e8f0; font-size: 18px; font-weight: 600; }
       .s { fill: #94a3b8; font-size: 14px; }
       .lbl { fill: #38bdf8; font-size: 13px; letter-spacing: 2px; font-weight: 700; }
-      .line { stroke: #3b4b63; stroke-width: 1.6; fill: none; }
+      .line { stroke: #64748b; stroke-width: 1.6; fill: none; }
       .hline { stroke: #475569; stroke-width: 1.4; fill: none; }
-      .chip { fill: #0f1d31; stroke: #334155; stroke-width: 1; }
     </style>
   </defs>
 
-  <rect class="bg" width="1200" height="760" rx="22"/>
+  <rect class="bg" x="1" y="1" width="1198" height="818" rx="22"/>
 
   <!-- title -->
-  <text x="44" y="58" class="t" font-size="28">ARIA-X — Autonomous Reasoning &amp; Investigation Agent, eXtended</text>
-  <text x="44" y="86" class="s">state-space security research engine · Python 3.11+ · standard library only</text>
+  <text x="44" y="56" class="t" font-size="26">ARIA-X — Autonomous Reasoning &amp; Investigation Agent, eXtended</text>
+  <text x="44" y="84" class="s">state-space security research engine · CPython 3.11+ · standard library only · v0.3.0</text>
 
   <!-- lineage column -->
-  <text x="44" y="132" class="lbl">CONCEPT LINEAGE</text>
+  <text x="44" y="130" class="lbl">CONCEPT LINEAGE</text>
   <g>
-    <rect class="box" x="44" y="150" width="232" height="104" rx="14"/>
-    <text x="62" y="180" class="t">Cairn</text>
-    <text x="62" y="206" class="s">AGPL-3.0 · blackboard</text>
-    <text x="62" y="228" class="s">Fact / Intent / Hint</text>
-    <text x="62" y="246" class="s">reason → explore OODA</text>
+    <rect class="box" x="44" y="182" width="256" height="124" rx="14"/>
+    <text x="64" y="212" class="t">Cairn</text>
+    <text x="64" y="238" class="s">AGPL-3.0 · blackboard</text>
+    <text x="64" y="262" class="s">Fact / Intent / Hint</text>
+    <text x="64" y="286" class="s">reason → explore OODA</text>
 
-    <rect class="box" x="44" y="270" width="232" height="122" rx="14"/>
-    <text x="62" y="300" class="t">ARTEX</text>
-    <text x="62" y="326" class="s">AGPL-3.0 · dual graph</text>
-    <text x="62" y="348" class="s">planner owns intents</text>
-    <text x="62" y="370" class="s">todo chain + traces</text>
+    <rect class="box" x="44" y="330" width="256" height="124" rx="14"/>
+    <text x="64" y="360" class="t">ARTEX</text>
+    <text x="64" y="386" class="s">AGPL-3.0 · dual graph</text>
+    <text x="64" y="410" class="s">planner owns intents</text>
+    <text x="64" y="434" class="s">todo chain + traces</text>
 
-    <rect class="box" x="44" y="408" width="232" height="104" rx="14"/>
-    <text x="62" y="438" class="t">PentAGI</text>
-    <text x="62" y="464" class="s">MIT · specialist team</text>
-    <text x="62" y="486" class="s">providers · sandbox</text>
-    <text x="62" y="504" class="s">layered memory</text>
+    <rect class="box" x="44" y="478" width="256" height="124" rx="14"/>
+    <text x="64" y="508" class="t">PentAGI</text>
+    <text x="64" y="534" class="s">MIT · specialist team</text>
+    <text x="64" y="558" class="s">LLM router · sandbox</text>
+    <text x="64" y="582" class="s">layered TF-IDF memory</text>
   </g>
 
-  <path class="hline" d="M276 202 H330 M276 331 H330 M276 460 H330"/>
-  <path class="line" d="M330 202 V460 M330 331 H372"/>
+  <path class="hline" d="M300 244 H328 M300 392 H328 M300 540 H328"/>
+  <path class="line" d="M328 244 V540"/>
+  <path class="line" d="M328 412 H354" marker-end="url(#arr)"/>
 
   <!-- main stack -->
-  <text x="388" y="132" class="lbl">RUNTIME</text>
-  <rect class="accent" x="388" y="150" width="770" height="76" rx="14"/>
-  <text x="410" y="182" class="t">Web console (vanilla JS)</text>
-  <text x="410" y="206" class="s">GET / · live SSE events · graph / findings / traces / approvals / report</text>
+  <text x="356" y="130" class="lbl">RUNTIME (7 CORE PACKAGES + REPORT)</text>
 
-  <rect class="accent" x="388" y="242" width="770" height="76" rx="14"/>
-  <text x="410" y="274" class="t">HTTP API — create_server(config, engagement, bus, store)</text>
-  <text x="410" y="298" class="s">127.0.0.1:8787 · optional Bearer token · SSE without holding the SQLite lock</text>
+  <rect class="accent" x="356" y="146" width="800" height="72" rx="14"/>
+  <text x="376" y="176" class="t">Web console — web/ (vanilla JS, zero CDN)</text>
+  <text x="376" y="200" class="s">GET / · live SSE · graph / findings / traces / approvals / report</text>
 
-  <rect class="engine" x="388" y="334" width="770" height="188" rx="14"/>
-  <text x="410" y="366" class="t" font-size="20">Engagement engine — orchestration loop</text>
+  <rect class="accent" x="356" y="236" width="800" height="72" rx="14"/>
+  <text x="376" y="266" class="t">HTTP API — server/ (ThreadingHTTPServer)</text>
+  <text x="376" y="290" class="s">127.0.0.1:8787 · Bearer auth · lock-free SSE event replay</text>
+
+  <rect class="engine" x="356" y="326" width="800" height="172" rx="14"/>
+  <text x="376" y="358" class="t" font-size="19">Engagement engine — engine/ &amp; report/</text>
   <g class="s">
-    <text x="410" y="392">bootstrap → reason (planner) → dispatch explore ×N → persist → repeat</text>
-    <text x="410" y="414">budget guards: seconds · LLM calls · tokens · tool calls · intents · concurrency</text>
-    <text x="410" y="436">idle / change detection · todo chain · hint injection · cancellation</text>
-    <text x="410" y="458">mock · scenario · OpenAI-compatible · Anthropic · Ollama providers</text>
-    <text x="410" y="480">report renderer → markdown · HTML · JSON export</text>
-    <text x="410" y="502">JSONL event log + SQLite WAL state</text>
+    <text x="376" y="386">bootstrap → reason (planner) → dispatch ×N → persist → resume / report</text>
+    <text x="376" y="410">4D budgets (time · LLM · tokens · tools) · project flock · resume</text>
+    <text x="376" y="434">idle &amp; change guards · cross-wakeup todo chain · hints · cancel</text>
+    <text x="376" y="458">evidence reports (MD · HTML with inline attack-path SVG · JSON)</text>
+    <text x="376" y="482">JSONL event archive + transient LLM stream progress</text>
   </g>
 
-  <!-- agents -->
-  <rect class="engine" x="388" y="538" width="376" height="118" rx="14"/>
-  <text x="410" y="568" class="t">Agents</text>
+  <!-- agents & llm -->
+  <rect class="engine" x="356" y="524" width="390" height="122" rx="14"/>
+  <text x="376" y="554" class="t">Agents + LLM (agents/, llm/)</text>
   <g class="s">
-    <text x="410" y="592">planner (JSON intent contract)</text>
-    <text x="410" y="612">explore workers (tool loop)</text>
-    <text x="410" y="632">specialists (researcher / coder / adviser / memorist)</text>
+    <text x="376" y="580">planner, explore workers, reporter</text>
+    <text x="376" y="604">researcher, coder, adviser, memorist</text>
+    <text x="376" y="628">OpenAI, Anthropic, Ollama, mock, SSE</text>
   </g>
 
   <!-- tools -->
-  <rect class="tool" x="782" y="538" width="376" height="118" rx="14"/>
-  <text x="804" y="568" class="t">Tool layer</text>
+  <rect class="tool" x="766" y="524" width="390" height="122" rx="14"/>
+  <text x="786" y="554" class="t">Tools — tools/ (27 built-in)</text>
   <g class="s">
-    <text x="804" y="592">scope guard → network tools</text>
-    <text x="804" y="612">terminal + sandbox (local / docker / mock)</text>
-    <text x="804" y="632">blackboard writes · knowledge search · delegation</text>
+    <text x="786" y="580">Scope allowlist + per-decision DNS pin</text>
+    <text x="786" y="604">sandbox (local / docker / mock) + PTY</text>
+    <text x="786" y="628">blackboard, TF-IDF memory, approvals</text>
   </g>
 
   <!-- store -->
-  <rect class="store" x="388" y="672" width="770" height="56" rx="14"/>
-  <text x="410" y="706" class="t">SQLite store</text>
-  <text x="520" y="706" class="s">nodes · edges · assets · anchors · todos · tasks · traces · evidence · audit · approvals</text>
+  <rect class="store" x="356" y="666" width="800" height="96" rx="14"/>
+  <text x="376" y="696" class="t">SQLite store — store/ (15 tables · WAL · dual graph)</text>
+  <g class="s">
+    <text x="376" y="722">nodes, edges (exploration) · assets, anchors (asset graph) · todos, tasks</text>
+    <text x="376" y="744">projects, runs, traces, evidence, approvals, audit, messages, meta, kv</text>
+  </g>
 
   <!-- connections -->
   <g class="line">
-    <path d="M773 226 V242"/>
-    <path d="M773 318 V334"/>
-    <path d="M773 522 V538"/>
-    <path d="M576 656 V672"/>
-    <path d="M970 656 V672"/>
+    <path d="M756 218 V234" marker-end="url(#arr)"/>
+    <path d="M756 308 V324" marker-end="url(#arr)"/>
+    <path d="M756 498 V510 H551 V522" marker-end="url(#arr)"/>
+    <path d="M756 510 H961 V522" marker-end="url(#arr)"/>
+    <path d="M551 646 V664" marker-end="url(#arr)"/>
+    <path d="M961 646 V664" marker-end="url(#arr)"/>
   </g>
 
   <!-- footer -->
-  <text x="44" y="730" class="s">Authorized testing only · scope.authorized must be true · network tools call Scope before I/O</text>
+  <text x="44" y="794" class="s">Authorized local lab use only · scope.authorized must be true · target tools enforce Scope + DNS pin before I/O</text>
 </svg>

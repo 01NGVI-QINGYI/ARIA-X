@@ -50,26 +50,35 @@ Each verification engagement follows an auditable **directed state-space search*
 
 ### Compact Lineage Diagram
 
+<div align="center">
+
 ```mermaid
 flowchart LR
-    subgraph UP["Upstream Inspirations (Concepts & Engineering Discipline Only)"]
-        direction TB
-        A["<b>ARTEX</b> (AGPL-3.0)<br/>Dual Graph · Planner Sole Intent Source<br/>Cross-Wakeup Todos · Traces · Approval Gate"]
-        C["<b>Cairn</b> (AGPL-3.0)<br/>Fact / Intent / Hint Blackboard<br/>OODA Loop · State-Space Search"]
-        P["<b>PentAGI</b> (MIT)<br/>Specialist Delegation · Provider Router<br/>Sandboxed Terminal · Layered Memory"]
+    subgraph UP["Upstream Lineage"]
+        C["Cairn (AGPL-3.0)<br/>Fact/Intent Board<br/>OODA Reasoning<br/>State-Space Search"]
+        A["ARTEX (AGPL-3.0)<br/>Dual Graph + Traces<br/>Planner Intents<br/>Todos + Approvals"]
+        P["PentAGI (MIT)<br/>Specialist Team<br/>Provider Router<br/>Sandbox + Memory"]
     end
 
-    subgraph CORE["ARIA-X (Unified Zero-Dependency Python Engine)"]
-        direction TB
-        ST["<b>Unified State Layer (store/)</b><br/>15-Table SQLite: nodes / edges / assets / todos / traces / evidence"]
-        OR["<b>Unified Orchestration (engine/)</b><br/>bootstrap → reason → explore → persist → report"]
-        EX["<b>Guarded Execution (tools/ & agents/)</b><br/>27 Built-in Tools · Scope Allowlist · Approval Gate · 4D Budgets"]
+    subgraph CORE["ARIA-X Core"]
+        ST["Unified State<br/>store/ (SQLite)<br/>15-Table WAL Store<br/>Exploration + Assets"]
+        OR["Orchestration<br/>engine/ Loop<br/>4D Budgets + Todos<br/>Lock + Resume"]
+        EX["Guarded Execution<br/>agents · tools · llm<br/>27 Tools + Sandbox<br/>Scope + DNS Pin"]
     end
 
-    A & C --> ST & OR
+    OUT(["Outputs<br/>report · server · web<br/>Evidence Reports<br/>Audit + SSE Console"])
+
+    C --> ST
+    C --> OR
+    A --> ST
+    A --> OR
     P --> EX
-    ST & OR & EX --> OUT(["<b>Reproducible Artifacts</b><br/>State Graph · Audit Trail · Evidence-Backed Report"])
+    ST --> OUT
+    OR --> OUT
+    EX --> OUT
 ```
+
+</div>
 
 ### Capability Fusion Matrix
 
@@ -123,21 +132,26 @@ ARIA-X combines context-aware agent reasoning with explicit state, execution pol
 
 Main execution loop ([src/aria_x/engine/orchestrator.py](src/aria_x/engine/orchestrator.py)):
 
-```text
-bootstrap (optional: single initial pass to gather baseline facts)
-   ↓
-reason (Planner reads the blackboard → emits Intents + Todos, or marks complete)
-   ↓
-dispatch (schedules up to max_concurrency Explore tasks, respecting Todo dependencies)
-   ↓
-worker OODA (invokes guarded tools → records Fact / Finding / Assets / Goal Proven)
-   ↓
-persist (commits nodes, edges, asset anchors, traces, evidence, and Todo state)
-   ↓
-budget / timeout / idle check → continues to next round or wraps up cleanly
-   ↓
-report (renders Markdown + HTML + findings.json) + JSONL event archive + audit trail
+<div align="center">
+
+```mermaid
+flowchart LR
+    BOOT["1. bootstrap<br/>Baseline probe"]
+    RSN["2. reason<br/>Emit Intents"]
+    DSP["3. dispatch<br/>Parallel tasks"]
+    WRK["4. worker<br/>Guarded tools"]
+    PST["5. persist<br/>SQLite + audit"]
+    RPT(["6. report<br/>MD / HTML / JSON"])
+
+    BOOT --> RSN
+    RSN --> DSP
+    DSP --> WRK
+    WRK --> PST
+    PST -->|"next round"| RSN
+    PST -->|"done / limit"| RPT
 ```
+
+Budget, timeout and idle checks decide whether the loop continues; `persist` also writes the JSONL event archive and the audit trail.
 
 **Architectural invariants**:
 1. **Single LLM entry point**: All model calls route through `ModelRouter`, with per-role model overrides (`[llm.role_models]`).

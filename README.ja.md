@@ -41,6 +41,38 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
 
 詳細な出典と設計上の相違点は [NOTICE.md](NOTICE.md)、[THIRD_PARTY.md](THIRD_PARTY.md)、[docs/FUSION.md](docs/FUSION.md) を参照してください。
 
+### 設計系譜と統合図
+
+<div align="center">
+
+```mermaid
+flowchart LR
+    subgraph UP["上流の設計思想"]
+        C["Cairn (AGPL-3.0)<br/>Fact/Intent 黒板<br/>OODA 推論ループ<br/>状態空間探索"]
+        A["ARTEX (AGPL-3.0)<br/>デュアルグラフ<br/>Planner 単一意図<br/>Todo と承認ゲート"]
+        P["PentAGI (MIT)<br/>専門ロール委任<br/>LLM ルータ抽象<br/>隔離実行と記憶"]
+    end
+
+    subgraph CORE["ARIA-X コア層"]
+        ST["統合状態層<br/>store/ (SQLite)<br/>15 表 WAL 永続化<br/>探索・資産グラフ"]
+        OR["統合制御層<br/>engine/ ループ<br/>4次元予算と Todo<br/>排他ロックと再開"]
+        EX["制御実行層<br/>agents · tools · llm<br/>27 ツールと隔離<br/>Scope + DNS 固定"]
+    end
+
+    OUT(["再現可能な成果物<br/>report · server · web<br/>証拠付きレポート<br/>監査 + SSE 画面"])
+
+    C --> ST
+    C --> OR
+    A --> ST
+    A --> OR
+    P --> EX
+    ST --> OUT
+    OR --> OUT
+    EX --> OUT
+```
+
+</div>
+
 ## 主な機能（v0.3.0）
 
 - **デュアルグラフによる状態管理**：探索ノード・エッジと資産・アンカーを SQLite に保存し、事実・仮説・発見事項を追跡します。
@@ -59,13 +91,26 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
   <img src="assets/architecture.svg" alt="ARIA-X のアーキテクチャ" width="100%">
 </p>
 
-```text
-Bootstrap → Reason (Planner) → Dispatch → Explore (Workers)
-                   ↑                          ↓
-               次の探索 ← Persist (SQLite / audit)
-                                             ↓
-                                  Report (MD / HTML / JSON)
+<div align="center">
+
+```mermaid
+flowchart LR
+    BOOT["1. bootstrap<br/>初期事実収集"]
+    RSN["2. reason<br/>Intent 生成"]
+    DSP["3. dispatch<br/>並列タスク起動"]
+    WRK["4. worker<br/>制御ツール検証"]
+    PST["5. persist<br/>状態・証拠保存"]
+    RPT(["6. report<br/>レポート出力"])
+
+    BOOT --> RSN
+    RSN --> DSP
+    DSP --> WRK
+    WRK --> PST
+    PST -->|"次ラウンド"| RSN
+    PST -->|"完了 / 上限"| RPT
 ```
+
+予算・タイムアウト・アイドル判定が次ラウンドか収束かを決め、`persist` で JSONL イベントと監査記録も書き出します。
 
 ツール実行は ToolRegistry に集約され、対象範囲の確認、リスクに応じた承認、監査が行われます。詳しくは [アーキテクチャ](docs/ARCHITECTURE.md) と [安全モデル](docs/SECURITY.md) を参照してください。
 

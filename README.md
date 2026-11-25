@@ -50,26 +50,35 @@
 
 ### 紧凑谱系与融合图
 
+<div align="center">
+
 ```mermaid
 flowchart LR
-    subgraph UP["上游思想来源（仅借鉴架构与工程纪律）"]
-        direction TB
-        A["<b>ARTEX</b> (AGPL-3.0)<br/>双图分离 · Planner 唯一意图源<br/>跨唤醒 Todo · 过程轨迹 · 审批门"]
-        C["<b>Cairn</b> (AGPL-3.0)<br/>Fact / Intent / Hint 黑板<br/>OODA 循环 · 状态空间搜索"]
-        P["<b>PentAGI</b> (MIT)<br/>专家角色委托 · Provider 抽象<br/>隔离沙箱终端 · 分层记忆"]
+    subgraph UP["上游思想来源"]
+        C["Cairn (AGPL-3.0)<br/>Fact/Intent 黑板<br/>OODA 推理闭环<br/>状态空间搜索"]
+        A["ARTEX (AGPL-3.0)<br/>双图分离与轨迹<br/>Planner 意图源<br/>Todo 链与审批门"]
+        P["PentAGI (MIT)<br/>专家角色委托<br/>多模型路由抽象<br/>隔离沙箱与记忆"]
     end
 
-    subgraph CORE["ARIA-X（纯 Python 标准库统一实现）"]
-        direction TB
-        ST["<b>统一状态层 (store/)</b><br/>SQLite 15 表：节点 / 边 / 资产 / Todo / 轨迹 / 证据"]
-        OR["<b>统一编排层 (engine/)</b><br/>bootstrap → reason → explore → persist → report"]
-        EX["<b>受控执行层 (tools/ & agents/)</b><br/>27 个内置工具 · Scope 白名单 · 审批门 · 预算护栏"]
+    subgraph CORE["ARIA-X 核心层"]
+        ST["统一状态层<br/>store/ (SQLite)<br/>15 表 WAL 持久化<br/>探索图与资产图"]
+        OR["统一编排层<br/>engine/ 主循环<br/>四维预算与 Todo<br/>跨进程锁与续跑"]
+        EX["受控执行层<br/>agents · tools · llm<br/>27 工具与沙箱<br/>Scope 与 DNS 钉扎"]
     end
 
-    A & C --> ST & OR
+    OUT(["可复现输出<br/>report · server · web<br/>证据链报告与审计<br/>本地 SSE 控制台"])
+
+    C --> ST
+    C --> OR
+    A --> ST
+    A --> OR
     P --> EX
-    ST & OR & EX --> OUT(["<b>可复现输出</b><br/>统一状态图 · 审计日志 · 证据链报告"])
+    ST --> OUT
+    OR --> OUT
+    EX --> OUT
 ```
+
+</div>
 
 ### 各层能力融合对照
 
@@ -123,21 +132,26 @@ ARIA-X 将上下文感知的智能体推理与结构化状态管理、工具执�
 
 单次验证运行的主循环（详见 [src/aria_x/engine/orchestrator.py](src/aria_x/engine/orchestrator.py)）：
 
-```text
-bootstrap（可选：单次初始探测与基线事实收集）
-   ↓
-reason（Planner 读取黑板 → 生成下一批 Intents + Todos，或判定完成）
-   ↓
-dispatch（按依赖关系并发派发最多 max_concurrency 个 Explore 任务）
-   ↓
-worker OODA（调用受控工具 → 提交 Fact / Finding / Assets / Goal Proven）
-   ↓
-persist（原子化写入节点、边、资产锚点、过程轨迹、证据与 Todo 状态）
-   ↓
-预算 / 超时 / 空转检测 → 进入下一轮推理或平稳收尾
-   ↓
-report（生成 Markdown + HTML + findings.json）+ JSONL 事件归档 + 审计落库
+<div align="center">
+
+```mermaid
+flowchart LR
+    BOOT["1. bootstrap<br/>初始基线探测"]
+    RSN["2. reason<br/>Planner 生成意图"]
+    DSP["3. dispatch<br/>并发派发任务"]
+    WRK["4. worker<br/>受控工具验证"]
+    PST["5. persist<br/>状态与证据落库"]
+    RPT(["6. report<br/>生成证据链报告"])
+
+    BOOT --> RSN
+    RSN --> DSP
+    DSP --> WRK
+    WRK --> PST
+    PST -->|"下一轮"| RSN
+    PST -->|"完成 / 预算收尾"| RPT
 ```
+
+预算、超时与空转检测决定循环继续还是平稳收尾；`persist` 阶段同时写出 JSONL 事件归档并落库审计记录。
 
 **关键架构边界**：
 1. **模型调用唯一入口**：所有模型请求必须经过 `ModelRouter`，支持按角色（`planner / worker / specialist / reporter`）独立配置模型（`[llm.role_models]`）。

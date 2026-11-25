@@ -17,7 +17,10 @@ Threading model
 from __future__ import annotations
 
 import copy
+import contextlib
+import fcntl
 import threading
+from pathlib import Path
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -150,21 +153,22 @@ class Engagement:
         project = self.store.get_project(project_id)
         self._assert_authorized(project)
         self._assert_no_active_run(project.id)
-        run = self._create_run(project_id)
-        handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
-        with self._lock:
-            self._runs[run.id] = handle
-        try:
-            outcome = self._execute(project, run, handle, goal=goal)
-        except Exception as exc:  # noqa: BLE001 - boundary converts to a result
-            self._mark_failed(run.id, exc)
-            outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
-                                 status="failed", summary="", report_path="",
-                                 error=f"{type(exc).__name__}: {exc}", metrics={})
-        finally:
-            handle.result = outcome
-            handle.finished_at = time.monotonic()
-        return EngagementResult.from_outcome(outcome)
+        with self.project_lock(project.id):
+            run = self._create_run(project_id)
+            handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+            with self._lock:
+                self._runs[run.id] = handle
+            try:
+                outcome = self._execute(project, run, handle, goal=goal)
+            except Exception as exc:  # noqa: BLE001 - boundary converts to a result
+                self._mark_failed(run.id, exc)
+                outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
+                                     status="failed", summary="", report_path="",
+                                     error=f"{type(exc).__name__}: {exc}", metrics={})
+            finally:
+                handle.result = outcome
+                handle.finished_at = time.monotonic()
+            return EngagementResult.from_outcome(outcome)
 
     def resume(self, run_id: str | None = None, *, project_id: str | None = None) -> EngagementResult:
         """Resume an unfinished run instead of starting a new one.
@@ -189,22 +193,23 @@ class Engagement:
             raise NotFound(f"project not found: {run.project_id}")
         self._assert_authorized(project)
         self._assert_no_active_run(project.id)
-        self.store.update_run(run.id, status="running", error="", ended_at="")
-        run = self.store.get_run(run.id)
-        handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
-        with self._lock:
-            self._runs[run.id] = handle
-        try:
-            outcome = self._execute(project, run, handle, goal=None, resume=True)
-        except Exception as exc:  # noqa: BLE001 - boundary converts to a result
-            self._mark_failed(run.id, exc)
-            outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
-                                 status="failed", summary="", report_path="",
-                                 error=f"{type(exc).__name__}: {exc}", metrics={})
-        finally:
-            handle.result = outcome
-            handle.finished_at = time.monotonic()
-        return EngagementResult.from_outcome(outcome)
+        with self.project_lock(project.id):
+            self.store.update_run(run.id, status="running", error="", ended_at="")
+            run = self.store.get_run(run.id)
+            handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+            with self._lock:
+                self._runs[run.id] = handle
+            try:
+                outcome = self._execute(project, run, handle, goal=None, resume=True)
+            except Exception as exc:  # noqa: BLE001 - boundary converts to a result
+                self._mark_failed(run.id, exc)
+                outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
+                                     status="failed", summary="", report_path="",
+                                     error=f"{type(exc).__name__}: {exc}", metrics={})
+            finally:
+                handle.result = outcome
+                handle.finished_at = time.monotonic()
+            return EngagementResult.from_outcome(outcome)
 
     def start_background(self, project_id: str, *, goal: str | None = None) -> str:
         """Start a run on a daemon thread and return its run id immediately."""
@@ -244,6 +249,38 @@ class Engagement:
             self.config, store=self.store, events=self.events,
             provider=self._resolve_provider(), cancel=handle.cancel)
         return orchestrator.run(project, run, goal=goal, resume=resume)
+
+    @contextlib.contextmanager
+    def project_lock(self, project_id: str):
+        """Cross-process, non-blocking lock so a project is driven by one owner.
+
+        A file lock is used on purpose: a crashed process leaves
+        ``runs.status='running'`` behind, so a SQL status guard would deadlock
+        the very recovery it is meant to allow. The kernel releases the lock
+        when the owner dies, keeping a crashed run resumable.
+        """
+        directory = Path(getattr(self.config, "data_dir", "data")) / "locks"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            yield
+            return
+        handle = None
+        try:
+            handle = open(directory / f"{project_id}.lock", "a+")
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                raise ConfigError(
+                    f"project {project_id} is already being run by another process") from exc
+            yield
+        finally:
+            if handle is not None:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                handle.close()
 
     def _assert_no_active_run(self, project_id: str) -> None:
         """One run per project at a time: two loops would duplicate intents."""

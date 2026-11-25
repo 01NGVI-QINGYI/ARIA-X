@@ -125,3 +125,70 @@ class ResumeBudgetAndStateTests(unittest.TestCase):
         self.store.update_run(run.id, ended_at="2026-11-25T00:00:00Z")
         self.engagement.resume(run.id)
         self.assertNotEqual(self.store.get_run(run.id).ended_at, "2026-11-25T00:00:00Z")
+
+
+class ResumeBudgetSnapshotTests(unittest.TestCase):
+    """Resume must restore the whole budget, not just the token counters."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AriaXConfig(data_dir=str(self.tmp / "data"), runs_dir=str(self.tmp / "runs"))
+        self.cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.1"],
+                                     allow_loopback=True, max_rps=100)
+        self.cfg.llm = LLMConfig(provider="mock")
+        self.cfg.sandbox = SandboxConfig(backend="local")
+        self.cfg.safety = SafetyConfig(approval="auto")
+        self.store = Store(":memory:")
+        self.bus = EventBus()
+        self.engagement = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.project = self.engagement.create_project("resume", "prove it")
+
+    def tearDown(self) -> None:
+        self.engagement.close()
+        self.store.close()
+
+    def test_elapsed_seconds_survive_resume(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="running"))
+        self.store.update_run(run.id, budget={"elapsed_seconds": 50.0, "intents_started": 3},
+                              usage={"llm_calls": 9, "tool_calls": 7})
+        self.engagement.resume(run.id)
+        budget = self.store.get_run(run.id).budget
+        self.assertGreaterEqual(budget.get("elapsed_seconds", 0), 50.0,
+                                "a resumed run keeps the time it already spent")
+
+    def test_intents_started_survive_resume(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="running"))
+        self.store.update_run(run.id, budget={"elapsed_seconds": 10.0, "intents_started": 3})
+        self.engagement.resume(run.id)
+        budget = self.store.get_run(run.id).budget
+        self.assertGreaterEqual(budget.get("intents_started", 0), 3,
+                                "the intent allowance keeps counting existing intents")
+
+
+class CrossInstanceRunLockTests(unittest.TestCase):
+    """Two Engagement instances must not drive the same project at once."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AriaXConfig(data_dir=str(self.tmp / "data"), runs_dir=str(self.tmp / "runs"))
+        self.cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.1"],
+                                     allow_loopback=True, max_rps=100)
+        self.cfg.llm = LLMConfig(provider="mock")
+        self.cfg.sandbox = SandboxConfig(backend="local")
+        self.cfg.safety = SafetyConfig(approval="auto")
+        self.store = Store(":memory:")
+        self.bus = EventBus()
+        self.first = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.second = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.project = self.first.create_project("locked", "prove it")
+
+    def tearDown(self) -> None:
+        self.first.close()
+        self.second.close()
+        self.store.close()
+
+    def test_second_instance_cannot_resume_the_same_run(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="failed"))
+        with self.first.project_lock(self.project.id):
+            with self.assertRaises(ConfigError):
+                self.second.resume(run.id)

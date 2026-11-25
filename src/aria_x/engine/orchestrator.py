@@ -186,7 +186,10 @@ class Orchestrator:
         if project_scope.get("authorized") is False:
             raise ConfigError("refusing to start: project scope.authorized is false")
 
-        self.budget = Budget(self.config.budget)
+        # A resumed run continues the budget it already spent: elapsed time and
+        # the intent allowance come back from the persisted snapshot.
+        self.budget = (Budget.from_snapshot(self.config.budget, run.budget)
+                       if resume else Budget(self.config.budget))
         if resume:
             self._restore_progress(run)
         self.router = ModelRouter(self.config, budget=self.budget, events=self.events,
@@ -257,6 +260,9 @@ class Orchestrator:
         except Exception:
             existing = []
         self._intents_created = len([n for n in existing if getattr(n, "kind", "") == "intent"])
+        if self.budget is not None:
+            # Budget.check_intents() counts its own counter, not _intents_created.
+            self.budget.intents_started = max(self.budget.intents_started, self._intents_created)
         for node in existing:
             if getattr(node, "kind", "") != "intent":
                 continue

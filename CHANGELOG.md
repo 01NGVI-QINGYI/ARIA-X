@@ -16,7 +16,7 @@ change, but persisted schema changes will include a migration note.
   payloads are not mistaken for targets, and `git` is only checked for remote
   subcommands.
 - **DNS pinning**: the address authorized by scope is the address contacted.
-  `Scope` records the first resolved address per host and HTTP requests route
+  `Scope` records the address approved by the current authorization and HTTP requests route
   lookups through a thread-local resolver pin, closing the rebinding window
   between check and connect. TLS SNI and the `Host` header keep the hostname.
 - **Mass docker teardown blocked**: `docker rm -f $(docker ps -aq)`,

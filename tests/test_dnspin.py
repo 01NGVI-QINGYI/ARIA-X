@@ -225,3 +225,39 @@ class RedirectAndProbePinningTests(unittest.TestCase):
         finally:
             store.close()
             listener.close()
+
+
+class PinPoisoningTests(unittest.TestCase):
+    """A denied resolution must never be pinned for a later allowed request."""
+
+    def _scope(self, targets):
+        return Scope(ScopeConfig(authorized=True, targets=targets, allow_loopback=True,
+                                 allow_private=True, max_rps=100),
+                     allow_public_targets=True)
+
+    def test_denied_address_is_not_pinned(self) -> None:
+        s = self._scope(["127.0.0.2/32"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+            denied = s.authorize_host("moving.test", 80)
+        self.assertFalse(denied.allowed)
+        self.assertNotIn("moving.test", s.pinned_addresses(),
+                         "a denied resolution must not be recorded")
+
+    def test_allowed_host_pins_an_address_inside_the_rule(self) -> None:
+        s = self._scope(["127.0.0.2/32"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1", "127.0.0.2"]):
+            allowed = s.authorize_host("multi.test", 80)
+        self.assertTrue(allowed.allowed)
+        pinned = s.pinned_addresses().get("multi.test")
+        self.assertEqual(pinned, "127.0.0.2",
+                         "the pinned address must be the one that matched the rule")
+
+    def test_later_authorization_updates_the_pin(self) -> None:
+        s = self._scope(["127.0.0.0/8"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+            s.authorize_host("rotate.test", 80)
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.2"]):
+            allowed = s.authorize_host("rotate.test", 80)
+        self.assertTrue(allowed.allowed)
+        self.assertEqual(s.pinned_addresses().get("rotate.test"), "127.0.0.2",
+                         "the address of the current authorization wins")

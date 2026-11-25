@@ -351,11 +351,13 @@ class Scope:
         if not decision.allowed:
             return decision
         if self._matches_host_or_net(decision.host, port, decision.ips):
+            self._pin_authorized_address(decision.host, port, decision.ips)
             return Decision(True, "in scope", url, decision.host, port, decision.ips)
         path_reason = ""
         for rule in self.url_rules:
             matched, rule_reason = rule.check(scheme, decision.host, port, path)
             if matched:
+                self._pin_authorized_address(decision.host, port, decision.ips)
                 return Decision(True, "in scope", url, decision.host, port, decision.ips)
             if rule_reason and not path_reason:
                 path_reason = rule_reason
@@ -373,6 +375,7 @@ class Scope:
         if self._matches_host_or_net(decision.host, port, decision.ips) or any(
             rule.host_rule.matches(decision.host, port) for rule in self.url_rules
         ):
+            self._pin_authorized_address(decision.host, port, decision.ips)
             return Decision(True, "in scope", eff_target, decision.host, port, decision.ips)
         return Decision(False, "target is not in scope", eff_target, decision.host, port, decision.ips)
 
@@ -432,12 +435,37 @@ class Scope:
             if not self.allow_public_targets and ip.is_global:
                 return Decision(False, f"public address {ip} not allowed", target, host, port, ips)
 
-        if ips:
-            with self._pinned_lock:
-                # Keep the first address: re-authorizing the same host must not
-                # quietly move the pin to a later (attacker-influenced) answer.
-                self._pinned.setdefault(host, str(ips[0]))
         return Decision(True, "", target, host, port, ips)
+
+    def _pin_authorized_address(self, host: str, port: int | None, ips: Sequence[str]) -> None:
+        """Record the address that *this* authorization approved.
+
+        Called only after every rule has passed, so a denied resolution can
+        never be pinned. When a CIDR rule is what matched, the recorded address
+        is the one inside that rule (not blindly ``ips[0]``), which keeps the
+        pin and the decision consistent.
+        """
+        if not host or not ips:
+            return
+        hostname_rule = any(rule.matches(host, port) for rule in self.host_rules)
+        url_host_rule = any(rule.host_rule.matches(host, port) for rule in self.url_rules)
+        chosen = ""
+        for ip_text in ips:
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                continue
+            if any(ip in net for net in self.deny_nets):
+                continue
+            if not self.net_rules or hostname_rule or url_host_rule:
+                chosen = str(ip)
+                break
+            if any(ip in net for net in self.net_rules):
+                chosen = str(ip)
+                break
+        if chosen:
+            with self._pinned_lock:
+                self._pinned[host] = chosen
 
     def _matches_host_or_net(self, host: str, port: int | None, ips: Sequence[str]) -> bool:
         for rule in self.host_rules:

@@ -59,8 +59,10 @@ authorization for the same host cannot move a connection. HTTP requests route
 - Resume carries recorded usage into the budget, reopens abandoned `active`
   intents, clears `ended_at`, validates run/project ownership, and accepts
   `budget`/`cancelled` runs.
-- DNS pinning covers redirect hops and `tls_probe`/`port_scan`, and keeps the
-  first resolved address per host.
+- DNS pinning covers redirect hops and `tls_probe`/`port_scan`, binds every
+  request to its own decision's address, and refuses to connect when
+  authorization produced no address at all.
+
 - Streaming raises a retryable error on truncated/non-SSE responses; tool-free
   calls stream, tool-carrying calls do not.
 - Docker teardown rules cover backticks, `xargs`, `container/image` subcommands

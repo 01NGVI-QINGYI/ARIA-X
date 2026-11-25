@@ -32,6 +32,36 @@ from ..errors import ScopeViolation
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
 
+# --- non-HTTP target extraction ------------------------------------------------
+# ``terminal_exec`` is a free-form shell; literal IPs and URLs are not the only
+# way to name a host. These patterns cover the shapes that actually reach a
+# network target, while staying narrow enough to avoid matching payload text.
+_UNC = re.compile(r"//([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?:[/\\s:]|$)")
+_FQDN = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b")
+_USER_HOST = re.compile(r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})")
+_HOST_FLAG = re.compile(r"(?:^|\s)(?:-h|--host|--hostname|-H)\s+([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?=\s|$|:)")
+_HOST_PORT = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,63}):(\d{1,5})\b")
+
+# Tools whose positional argument is a remote host. Restricting to these keeps
+# e-mail addresses in payload flags from being mistaken for targets.
+_HOST_POSITIONAL_TOOLS = frozenset({
+    "ssh", "scp", "sftp", "rsync", "telnet", "ansible", "ansible-playbook",
+    "smbclient", "smbmap", "rpcclient", "enum4linux", "enum4linux-ng",
+    "crackmapexec", "netexec", "nxc", "nc", "ncat", "netcat", "socat",
+    "ldapsearch", "ldapwhoami", "snmpwalk", "snmpget", "whois", "dig", "host",
+    "nslookup", "ssh-keyscan", "wmiexec.py", "psexec.py", "atexec.py", "smbexec.py",
+    "mysql", "mariadb", "psql", "sqlcmd", "sqlplus", "redis-cli", "mongosh", "mongo",
+    "ftp", "lftp", "mosh", "autossh", "certipy", "bloodhound-python", "nxc",
+    "impacket-secretsdump", "impacket-psexec", "impacket-wmiexec",
+})
+
+# ``git`` only contacts a host for these subcommands; a commit message may
+# legitimately contain an e-mail address.
+_HOST_GIT_SUBCOMMANDS = frozenset({
+    "clone", "push", "pull", "fetch", "ls-remote", "remote", "submodule", "archive",
+})
+_MAX_COMMAND_HOSTS = 8
+
 
 @dataclass(slots=True)
 class Decision:
@@ -342,11 +372,12 @@ class Scope:
         boundary for terminal work. We only flag literal IPs and URLs, which
         catches the common accidental ``nmap 8.8.8.8`` mistake.
         """
-        for url in _URL.findall(command or ""):
+        text = command or ""
+        for url in _URL.findall(text):
             decision = self.authorize_url(url)
             if not decision.allowed:
                 return decision
-        for match in _IPV4.findall(command or ""):
+        for match in _IPV4.findall(text):
             try:
                 ip = ipaddress.ip_address(match)
             except ValueError:
@@ -354,7 +385,68 @@ class Scope:
             decision = self.authorize_host(str(ip), None, target=str(ip))
             if not decision.allowed:
                 return decision
+        for host, port in self._command_host_candidates(text):
+            decision = self.authorize_host(host, port, target=host)
+            if not decision.allowed:
+                return decision
         return Decision(True, "no explicit out-of-scope literal found", command)
+
+    def _command_host_candidates(self, command: str) -> list[tuple[str, int | None]]:
+        """Extract non-IP hostnames a shell command would contact, best-effort.
+
+        Covers UNC paths, ``user@host``, ``-h/--host`` flags, ``host:port``, and
+        the trailing positional argument of network tools. Returns at most
+        ``_MAX_COMMAND_HOSTS`` unique candidates, IP literals excluded.
+        """
+        found: list[tuple[str, int | None]] = []
+
+        def add(host: str, port: int | None = None) -> None:
+            host = (host or "").strip().strip(".").lower()
+            if not host or host in {"localhost", "localhost.localdomain"}:
+                return
+            if host.endswith(".local") or host.endswith(".localhost"):
+                return
+            try:
+                ipaddress.ip_address(host)
+                return  # IP literals are handled by the caller
+            except ValueError:
+                pass
+            if not _FQDN.fullmatch(host):
+                return
+            if port is not None and not (0 < port <= 65535):
+                port = None
+            if (host, port) not in found:
+                found.append((host, port))
+
+        tokens = command.split()
+        tool = tokens[0].rsplit("/", 1)[-1] if tokens else ""
+        gated = tool in _HOST_POSITIONAL_TOOLS or tool.startswith("impacket-")
+        if tool == "git":
+            gated = len(tokens) > 1 and tokens[1] in _HOST_GIT_SUBCOMMANDS
+
+        for match in _UNC.findall(command):
+            add(match)
+        for host, port in _HOST_PORT.findall(command):
+            add(host, int(port) if port.isdigit() else None)
+
+        # ``user@host`` also appears in e-mail payloads (``--data email=a@b.tld``),
+        # so only treat it as a target when the command is a network client.
+        if gated:
+            for _user, host in _USER_HOST.findall(command):
+                add(host)
+            for host in _HOST_FLAG.findall(command):
+                add(host)
+
+        if gated:
+                for token in reversed(tokens[1:]):
+                    if token.startswith("-"):
+                        continue
+                    if "@" in token:
+                        break
+                    candidate = token.split(":", 1)[0]
+                    add(candidate)
+                    break
+        return found[:_MAX_COMMAND_HOSTS]
 
     def acquire_slot(self, host: str) -> None:
         self._limiter.acquire(host)

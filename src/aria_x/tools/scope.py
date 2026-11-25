@@ -166,9 +166,17 @@ class _UrlRule:
 
 
 class Scope:
+    """Authorization engine: host/net/URL rules, deny lists and rate limiting.
+
+    Resolved addresses are recorded in ``_pinned`` so the HTTP/TLS layer can
+    contact exactly the address that was authorized (see ``tools.dnspin``).
+    """
+
     def __init__(self, config: ScopeConfig, *, allow_public_targets: bool = True) -> None:
         self.config = config
         self.allow_public_targets = bool(allow_public_targets)
+        self._pinned: dict[str, str] = {}
+        self._pinned_lock = threading.Lock()
         self.host_rules: list[_HostRule] = []
         self.net_rules: list[ipaddress._BaseNetwork] = []
         self.url_rules: list[_UrlRule] = []
@@ -345,6 +353,9 @@ class Scope:
             if not self.allow_public_targets and ip.is_global:
                 return Decision(False, f"public address {ip} not allowed", target, host, port, ips)
 
+        if ips:
+            with self._pinned_lock:
+                self._pinned[host] = str(ips[0])
         return Decision(True, "", target, host, port, ips)
 
     def _matches_host_or_net(self, host: str, port: int | None, ips: Sequence[str]) -> bool:
@@ -447,6 +458,11 @@ class Scope:
                     add(candidate)
                     break
         return found[:_MAX_COMMAND_HOSTS]
+
+    def pinned_addresses(self) -> dict[str, str]:
+        """Return the recorded host -> address map for the current engagement."""
+        with self._pinned_lock:
+            return dict(self._pinned)
 
     def acquire_slot(self, host: str) -> None:
         self._limiter.acquire(host)

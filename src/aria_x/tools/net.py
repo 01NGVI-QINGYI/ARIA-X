@@ -34,6 +34,7 @@ from .. import __version__
 from ..errors import ScopeViolation
 from ..util import json_dumps, now_iso, redact, truncate
 from .base import ToolContext, ToolRegistry, ToolResult, ToolSpec
+from .dnspin import pin_resolution
 from .terminal import audit, clamp_float, clamp_int
 
 USER_AGENT = f"ARIA-X/{__version__} (authorized security research)"
@@ -202,7 +203,9 @@ def _http_request(ctx: ToolContext, *, method: str, url: str, headers: dict[str,
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}),
                                              _ScopedRedirectHandler(ctx, redirects))
         try:
-            resp = opener.open(request, timeout=timeout)
+            # Contact exactly the address that scope authorized (see tools.dnspin).
+            with pin_resolution(ctx.scope.pinned_addresses()):
+                resp = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # non-2xx is still a usable observation
             resp = exc
         except urllib.error.URLError as exc:

@@ -122,9 +122,14 @@ class Orchestrator:
     # public entry point
     # ------------------------------------------------------------------
 
-    def run(self, project: Project, run: Run, *, goal: str | None = None) -> RunOutcome:
-        """Execute the loop and always return a coherent :class:`RunOutcome`."""
-        self._prepare(project, run, goal=goal)
+    def run(self, project: Project, run: Run, *, goal: str | None = None,
+            resume: bool = False) -> RunOutcome:
+        """Execute the loop and always return a coherent :class:`RunOutcome`.
+
+        ``resume=True`` re-enters an existing run: bootstrap is skipped (its
+        nodes already exist) and the loop continues from persisted state.
+        """
+        self._prepare(project, run, goal=goal, resume=resume)
         status, summary, error = "completed", "", ""
         try:
             status, summary, error = self._loop()
@@ -162,9 +167,11 @@ class Orchestrator:
     # setup
     # ------------------------------------------------------------------
 
-    def _prepare(self, project: Project, run: Run, *, goal: str | None) -> None:
+    def _prepare(self, project: Project, run: Run, *, goal: str | None,
+                 resume: bool = False) -> None:
         self.project = project
         self.run_record = run
+        self._resuming = bool(resume)
         requested_goal = (goal or "").strip()
         if requested_goal and requested_goal != project.goal:
             try:
@@ -295,7 +302,7 @@ class Orchestrator:
 
     def _loop(self) -> tuple[str, str, str]:
         assert self.budget is not None
-        if self.config.engine.bootstrap:
+        if self.config.engine.bootstrap and not getattr(self, "_resuming", False):
             self._bootstrap_step()
             if self._goal_proven():
                 return "completed", self._completion_summary or "Goal proven during bootstrap.", ""

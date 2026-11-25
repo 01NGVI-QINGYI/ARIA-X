@@ -188,6 +188,16 @@ class Store:
             c.execute(f"UPDATE runs SET {', '.join(sets)} WHERE id=?", params)
         return self.get_run(run_id)
 
+    def latest_resumable_run(self, project_id: str | None = None) -> Run | None:
+        """Return the most recent run that can still be resumed (running/failed)."""
+        rows = self._all(
+            "SELECT * FROM runs WHERE status IN ('running','failed')"
+            + (" AND project_id=?" if project_id else "")
+            + " ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            (project_id,) if project_id else (),
+        )
+        return Run.from_row(rows[0]) if rows else None
+
     def list_runs(self, project_id: str | None = None, limit: int = 50) -> list[Run]:
         if project_id:
             rows = self._all("SELECT * FROM runs WHERE project_id=? ORDER BY started_at DESC LIMIT ?",

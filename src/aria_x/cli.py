@@ -72,6 +72,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", help="override llm.model")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--json", action="store_true", help="print the result as JSON")
+    p.add_argument("--resume", nargs="?", const="latest", default=None, metavar="RUN_ID",
+                   help="resume an unfinished run (omit RUN_ID for the latest one)")
 
     p = sub.add_parser("serve", help="start the web console", parents=[common])
     p.add_argument("--host", help="bind host (default 127.0.0.1)")
@@ -449,6 +451,23 @@ def cmd_run(args: argparse.Namespace) -> int:
         from .engine import Engagement
         engagement = Engagement(config, store=store, events=bus,
                                 provider=_provider(config) if args.provider else None)
+        if args.resume:
+            run_id = None if args.resume == "latest" else str(args.resume)
+            print_banner(config)
+            print(f"  resuming: {run_id or 'latest unfinished run'}")
+            result = engagement.resume(run_id, project_id=args.project_id)
+            printer.stop()
+            if args.json:
+                print(json_dumps(result.to_dict() if hasattr(result, "to_dict") else result.__dict__,
+                                 indent=2, ensure_ascii=False))
+            else:
+                print()
+                print(f"[aria-x] status={result.status} run={result.run_id} (resumed)")
+                if result.report_path:
+                    print(f"[aria-x] report: {result.report_path}")
+                if result.error:
+                    print(f"[aria-x] error: {result.error}", file=sys.stderr)
+            return 0 if result.ok else 1
         if args.project_id:
             project = store.get_project(args.project_id)
             goal = args.goal or project.goal

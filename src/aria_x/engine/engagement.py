@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from ..config import AriaXConfig, ScopeConfig
-from ..errors import ConfigError
+from ..errors import ConfigError, NotFound
 from ..events import EventBus, RUN_PAUSED
 from ..models import Project, Run
 from ..store import Store
@@ -163,6 +163,41 @@ class Engagement:
             handle.finished_at = time.monotonic()
         return EngagementResult.from_outcome(outcome)
 
+    def resume(self, run_id: str | None = None, *, project_id: str | None = None) -> EngagementResult:
+        """Resume an unfinished run instead of starting a new one.
+
+        A run left in ``running`` (crashed process) or ``failed`` is re-entered:
+        bootstrap is skipped, persisted nodes/assets/todos are reused and the loop
+        continues under the original run id, so traces and costs stay in one place.
+        """
+        self._ensure_open()
+        run = self.store.get_run(run_id) if run_id else self.store.latest_resumable_run(project_id)
+        if run is None:
+            raise NotFound(f"no resumable run for {run_id or project_id or 'any project'}")
+        if run.status not in {"running", "failed"}:
+            raise ConfigError(f"run {run.id} is {run.status!r}; only running/failed runs can resume")
+        project = self.store.get_project(run.project_id)
+        if project is None:
+            raise NotFound(f"project not found: {run.project_id}")
+        self._assert_authorized(project)
+        self._assert_no_active_run(project.id)
+        self.store.update_run(run.id, status="running", error="", finished_at=None)
+        run = self.store.get_run(run.id)
+        handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+        with self._lock:
+            self._runs[run.id] = handle
+        try:
+            outcome = self._execute(project, run, handle, goal=None, resume=True)
+        except Exception as exc:  # noqa: BLE001 - boundary converts to a result
+            self._mark_failed(run.id, exc)
+            outcome = RunOutcome(ok=False, project_id=project.id, run_id=run.id,
+                                 status="failed", summary="", report_path="",
+                                 error=f"{type(exc).__name__}: {exc}", metrics={})
+        finally:
+            handle.result = outcome
+            handle.finished_at = time.monotonic()
+        return EngagementResult.from_outcome(outcome)
+
     def start_background(self, project_id: str, *, goal: str | None = None) -> str:
         """Start a run on a daemon thread and return its run id immediately."""
         self._ensure_open()
@@ -196,11 +231,11 @@ class Engagement:
             handle.finished_at = time.monotonic()
 
     def _execute(self, project: Project, run: Run, handle: _RunHandle, *,
-                 goal: str | None) -> RunOutcome:
+                 goal: str | None, resume: bool = False) -> RunOutcome:
         orchestrator = Orchestrator(
             self.config, store=self.store, events=self.events,
             provider=self._resolve_provider(), cancel=handle.cancel)
-        return orchestrator.run(project, run, goal=goal)
+        return orchestrator.run(project, run, goal=goal, resume=resume)
 
     def _assert_no_active_run(self, project_id: str) -> None:
         """One run per project at a time: two loops would duplicate intents."""

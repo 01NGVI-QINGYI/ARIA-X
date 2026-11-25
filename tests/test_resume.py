@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from aria_x.config import AriaXConfig, LLMConfig, SafetyConfig, SandboxConfig, ScopeConfig
@@ -11,6 +12,7 @@ from aria_x.engine import Engagement
 from aria_x.errors import ConfigError, NotFound
 from aria_x.events import EventBus
 from aria_x.models import Node, Run
+from aria_x.engine.orchestrator import RunOutcome
 from aria_x.store import Store
 from aria_x.util import new_id
 
@@ -120,11 +122,22 @@ class ResumeBudgetAndStateTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.engagement.resume(run.id, project_id=self.other.id)
 
-    def test_ended_at_is_cleared_on_resume(self) -> None:
+    def test_ended_at_is_cleared_before_execution(self) -> None:
+        """The timestamp must be gone while the run executes, not just at the end."""
         run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="failed"))
         self.store.update_run(run.id, ended_at="2026-11-25T00:00:00Z")
-        self.engagement.resume(run.id)
-        self.assertNotEqual(self.store.get_run(run.id).ended_at, "2026-11-25T00:00:00Z")
+        seen = {}
+
+        def fake_run(_self, project, run_record, *, goal=None, resume=False):
+            seen["ended_at"] = self.store.get_run(run_record.id).ended_at
+            seen["resume"] = resume
+            return RunOutcome(ok=True, project_id=project.id, run_id=run_record.id,
+                              status="completed", summary="", report_path="", error="", metrics={})
+
+        with mock.patch("aria_x.engine.orchestrator.Orchestrator.run", fake_run):
+            self.engagement.resume(run.id)
+        self.assertEqual(seen["ended_at"], "", "ended_at must be cleared before the loop starts")
+        self.assertTrue(seen["resume"])
 
 
 class ResumeBudgetSnapshotTests(unittest.TestCase):

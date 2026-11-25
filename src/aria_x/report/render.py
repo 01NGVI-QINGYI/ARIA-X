@@ -789,14 +789,6 @@ _MAX_GRAPH_ASSETS = 18
 _MAX_GRAPH_FINDINGS = 12
 
 # File-ish suffixes that must never be mistaken for a hostname.
-_HOSTISH_SUFFIXES = frozenset({
-    "txt", "json", "sql", "py", "sh", "conf", "log", "md", "csv", "xml", "yml", "yaml",
-    "zip", "tar", "gz", "tgz", "bin", "pem", "key", "crt", "cer", "pcap", "html", "htm",
-    "js", "css", "png", "jpg", "jpeg", "gif", "pdf", "docx", "xlsx", "pptx", "db",
-    "sqlite", "bak", "old", "tmp", "lock", "cfg", "ini", "env", "sock", "pid", "toml",
-})
-
-
 def _anchors(export: Mapping[str, Any]) -> dict[str, list[str]]:
     """Map node id -> anchored asset ids (``finding -> asset`` edges)."""
     out: dict[str, list[str]] = {}

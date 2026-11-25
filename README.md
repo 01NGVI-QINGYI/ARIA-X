@@ -374,7 +374,7 @@ ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执�
 - **分层执行控制**：`CommandPolicy` 提供启发式命令过滤；进程级隔离可使用 Docker 后端（示例配置与 `aria-x init` 模板预设 `network = "none"`，程序内置默认值为 `bridge`）。命令过滤本身不等于操作系统沙箱。
 - **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.3.0 的实现范围。
 - **面向验证的工具集**：内置工具聚焦受控验证、状态管理与报告，不打包独立漏洞利用载荷或第三方扫描器。
-- **明确的演进方向**：专用 Prompt Injection 分类器和中断运行的原位恢复尚未实现，相关计划见 [开发路线图](docs/ROADMAP.md)。
+- **明确的演进方向**：专用 Prompt Injection 分类器尚未实现；中断或预算耗尽的运行可用 `aria-x run --resume` 继续，相关计划见 [开发路线图](docs/ROADMAP.md)。
 
 完整的威胁模型与安全披露流程见 [docs/SECURITY.md](docs/SECURITY.md)，演进路线图见 [docs/ROADMAP.md](docs/ROADMAP.md)。
 

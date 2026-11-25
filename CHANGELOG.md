@@ -3,6 +3,50 @@
 All notable changes to ARIA-X are documented here. ARIA-X is pre-1.0; interfaces may
 change, but persisted schema changes will include a migration note.
 
+## [0.3.0] — 2026-11-25
+
+### Capability & Correctness
+
+- **Non-HTTP targets now reach the scope engine**: `terminal_exec` only matched
+  literal IPv4 addresses and URLs, so `ssh root@evil.example`, `smbclient -L
+  //evil.example/share` and `mysql -h evil.example` executed with no scope
+  decision. UNC paths, `user@host`, `-h/--host` flags, `host:port` and the
+  trailing positional argument of network clients are now extracted and
+  authorized. `user@host` is gated on network clients so e-mail addresses in
+  payloads are not mistaken for targets, and `git` is only checked for remote
+  subcommands.
+- **DNS pinning**: the address authorized by scope is the address contacted.
+  `Scope` records the first resolved address per host and HTTP requests route
+  lookups through a thread-local resolver pin, closing the rebinding window
+  between check and connect. TLS SNI and the `Host` header keep the hostname.
+- **Mass docker teardown blocked**: `docker rm -f $(docker ps -aq)`,
+  `docker system prune` and the volume/prune family previously passed the
+  destructive policy, deleting unrelated containers on the operator's machine.
+- **Unimplemented config keys removed**: `skills_dir`, `prompts_dir`,
+  `planner_role`, `worker_role`, `specialist_role` and `reason_on_change` had no
+  effect. They are gone, and any unknown key (including typos) is now reported by
+  `aria-x doctor` instead of being dropped silently. The example config also had
+  `max_concurrency` under `[engine]` instead of `[budget]`.
+
+### Features
+
+- **Attack-path diagram**: report section 5 renders the asset chain and its
+  findings as a Mermaid flowchart in `report.md` and an inline SVG in
+  `report.html` (no JavaScript, no CDN), colour-coded by severity and localized.
+- **Resume**: `aria-x run --resume [RUN_ID]` (or `Engagement.resume()`) re-enters
+  a run left in `running` or `failed`. The run keeps its id, bootstrap is skipped
+  because its nodes exist, and traces/usage stay in one place.
+- **Streaming model output**: OpenAI and Anthropic providers stream plain-text
+  responses; the console shows a live character count. Deltas are emitted as
+  transient events, so per-token progress never reaches SQLite or the JSONL log.
+  Tool-calling calls stay non-streaming by design.
+
+### Notes
+
+- `save()`/`export_public()` write only new files; `save_private("<path>.json")`
+  remains the reloadable, `0o600` path (unchanged from 0.2.1).
+- Test count: 301 (was 269).
+
 ## [0.2.1] — 2026-11-23
 
 ### Breaking Changes & Migration

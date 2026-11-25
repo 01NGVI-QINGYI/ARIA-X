@@ -186,7 +186,7 @@ class EventPrinter:
         "task.started": "→", "task.finished": "✓", "task.failed": "✗",
         "finding.created": "★", "asset.found": "◇", "node.created": "·",
         "todo.updated": "☑", "report.ready": "⤓", "budget": "…", "error": "!",
-        "approval.requested": "?", "hint": "✎",
+        "approval.requested": "?", "hint": "✎", "llm_delta": "…",
     }
 
     def __init__(self, bus: EventBus, *, verbose: bool = False, quiet: bool = False) -> None:
@@ -211,6 +211,15 @@ class EventPrinter:
         if event.type == "trace":
             return
         if event.type in {"llm.call", "tool.call"} and not self.verbose:
+            return
+        if event.type == "llm_delta":
+            # One rewriting line instead of a line per token.
+            if self.verbose:
+                print(f"  … {data.get('role', '')} streaming {data.get('chars', 0)} chars")
+            else:
+                sys.stdout.write("\r  … streaming "
+                                 f"{data.get('chars', 0)} chars ({data.get('role', '')})")
+                sys.stdout.flush()
             return
         icon = self.ICONS.get(event.type, "·")
         line = self._describe(event.type, data)

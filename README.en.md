@@ -25,7 +25,7 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-269%20passing-brightgreen">
+  <img alt="tests" src="https://img.shields.io/badge/tests-301%20passing-brightgreen">
   <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
 </p>
 
@@ -422,7 +422,7 @@ The container image packages only ARIA-X's Python standard-library core without 
 ### Verification & Self-Check Scripts
 
 ```bash
-bash scripts/verify.sh          # runs all 269 unit tests + offline end-to-end demo (no network or API key)
+bash scripts/verify.sh          # runs all 301 unit tests + offline end-to-end demo (no network or API key)
 bash scripts/dev.sh test        # runs the unit test suite only
 bash scripts/dev.sh doctor      # runs environment diagnostics
 ```
@@ -449,7 +449,7 @@ ARIA-X/
 │   ├── report/                # Markdown / HTML / findings.json renderers
 │   ├── server/                # ThreadingHTTPServer REST API and SSE stream
 │   └── web/                   # zero-CDN local web console (HTML/CSS/JS)
-├── tests/                     # 269 unit and integration tests
+├── tests/                     # 301 unit and integration tests
 ├── examples/                  # local offline demo target, config, and scenario script
 ├── configs/                   # example configuration files
 └── docs/                      # architecture, fusion mapping, tools, security, deployment, roadmap

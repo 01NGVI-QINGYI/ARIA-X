@@ -17,6 +17,7 @@ Every network-capable tool calls :meth:`Scope.require_url` or
 from __future__ import annotations
 
 import ipaddress
+from pathlib import Path
 import posixpath
 import re
 import socket
@@ -33,34 +34,57 @@ _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
 
 # --- non-HTTP target extraction ------------------------------------------------
-# ``terminal_exec`` is a free-form shell; literal IPs and URLs are not the only
-# way to name a host. These patterns cover the shapes that actually reach a
-# network target, while staying narrow enough to avoid matching payload text.
+# ``terminal_exec`` is a free-form shell. Extract the host each shell command
+# would contact, one sub-command at a time. Two failure modes matter equally:
+# missing a real target (a bypass) and mistaking a local file name for a host
+# (a false positive that blocks legitimate work such as ``scp ... loot.txt``).
+
+_SEGMENT_SPLIT = re.compile(r"\|\||&&|[;|&]")
+_URI = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/\s]*@)?([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})")
 _UNC = re.compile(r"//([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?:[/\\s:]|$)")
 _FQDN = re.compile(r"\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}\b")
-_USER_HOST = re.compile(r"(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})")
-_HOST_FLAG = re.compile(r"(?:^|\s)(?:-h|--host|--hostname|-H)\s+([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?=\s|$|:)")
+_USER_HOST = re.compile(r"(?:^|[\s:])([A-Za-z0-9._%+-]+)@([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})")
+_HOST_FLAG_EQ = re.compile(r"(?:--host|--hostname)=([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})", re.I)
+_HOST_FLAG_SPACE = re.compile(r"(?:^|\s)(?:-h|--host|--hostname)\s+([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?=\s|$|:)")
+_HOST_SHORT_JOINED = re.compile(r"(?:^|\s)-h([A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z]{2,63})(?=\s|$)")
 _HOST_PORT = re.compile(r"\b([A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,63}):(\d{1,5})\b")
 
-# Tools whose positional argument is a remote host. Restricting to these keeps
-# e-mail addresses in payload flags from being mistaken for targets.
-_HOST_POSITIONAL_TOOLS = frozenset({
-    "ssh", "scp", "sftp", "rsync", "telnet", "ansible", "ansible-playbook",
-    "smbclient", "smbmap", "rpcclient", "enum4linux", "enum4linux-ng",
-    "crackmapexec", "netexec", "nxc", "nc", "ncat", "netcat", "socat",
-    "ldapsearch", "ldapwhoami", "snmpwalk", "snmpget", "whois", "dig", "host",
-    "nslookup", "ssh-keyscan", "wmiexec.py", "psexec.py", "atexec.py", "smbexec.py",
-    "mysql", "mariadb", "psql", "sqlcmd", "sqlplus", "redis-cli", "mongosh", "mongo",
-    "ftp", "lftp", "mosh", "autossh", "certipy", "bloodhound-python", "nxc",
-    "impacket-secretsdump", "impacket-psexec", "impacket-wmiexec",
+# Tools whose first positional argument is the remote host.
+_SSH_FAMILY = frozenset({"ssh", "scp", "sftp", "rsync", "mosh", "autossh", "telnet"})
+_HOST_SLOT = frozenset({
+    "nc", "ncat", "netcat", "socat", "dig", "host", "nslookup", "ping", "ping6",
+    "traceroute", "tracepath", "whois", "ftp", "lftp", "smbclient", "smbmap",
+    "rpcclient", "enum4linux", "enum4linux-ng", "crackmapexec", "netexec", "nxc",
+    "snmpwalk", "snmpget", "snmpbulkwalk", "ldapsearch", "ldapwhoami", "ssh-keyscan",
 })
-
-# ``git`` only contacts a host for these subcommands; a commit message may
-# legitimately contain an e-mail address.
-_HOST_GIT_SUBCOMMANDS = frozenset({
+# Tools that take a target anywhere in their argument list.
+_SCAN_FAMILY = frozenset({
+    "nmap", "masscan", "nikto", "hydra", "medusa", "curl", "wget", "nuclei",
+    "gobuster", "ffuf", "dirb", "dirsearch", "wfuzz", "whatweb", "sslyze",
+    "testssl", "testssl.sh", "amass", "subfinder", "dnsx", "httpx", "tlsx",
+    "bloodhound-python", "certipy", "impacket-secretsdump", "impacket-psexec",
+    "impacket-wmiexec", "wmiexec.py", "psexec.py", "atexec.py", "smbexec.py",
+})
+_DB_FAMILY = frozenset({"mysql", "mariadb", "psql", "sqlcmd", "sqlplus",
+                        "redis-cli", "mongosh", "mongo"})
+_GIT_REMOTE_SUBCOMMANDS = frozenset({
     "clone", "push", "pull", "fetch", "ls-remote", "remote", "submodule", "archive",
 })
-_MAX_COMMAND_HOSTS = 8
+# Flags that consume the next token, so the value is not mistaken for the host.
+_VALUE_FLAGS = frozenset({
+    "-p", "-P", "-l", "-i", "-o", "-F", "-J", "-c", "-e", "-b", "-D", "-L", "-R",
+    "-W", "-m", "-O", "-Q", "-S", "-w", "-E", "-u", "-C", "-n", "-t", "-s", "-A",
+    "--port", "--user", "--password", "--identity", "--config", "--output",
+    "--timeout", "--rate", "--proxy", "--header", "--data", "--cookie",
+})
+_NON_HOST_SUFFIXES = frozenset({
+    "txt", "json", "sql", "py", "sh", "conf", "log", "md", "csv", "xml", "yml", "yaml",
+    "zip", "tar", "gz", "tgz", "bin", "pem", "key", "crt", "cer", "pcap", "html", "htm",
+    "js", "css", "png", "jpg", "jpeg", "gif", "pdf", "docx", "xlsx", "pptx", "db",
+    "sqlite", "bak", "old", "tmp", "lock", "cfg", "ini", "env", "sock", "pid", "toml",
+    "war", "jar", "php", "rb", "pl", "c", "h", "o", "so", "dylib", "exe", "dll",
+})
+_MAX_COMMAND_HOSTS = 16
 
 
 @dataclass(slots=True)
@@ -98,6 +122,61 @@ class _HostRule:
 
 _ENCODED_TRAVERSAL = re.compile(r"%(?:2e|2f|5c|00)", re.I)
 _BAD_PERCENT = re.compile(r"%(?![0-9a-fA-F]{2})")
+
+
+_TOOLS_ALL = (_SSH_FAMILY | _HOST_SLOT | _SCAN_FAMILY | _DB_FAMILY)
+
+
+def _locate_network_tool(tokens: list[str]) -> tuple[str, list[str]]:
+    """Find the first real command in a segment, skipping wrappers and assignments."""
+    for index, token in enumerate(tokens):
+        base = token.rsplit("/", 1)[-1]
+        if base in _TOOLS_ALL or base.startswith("impacket-"):
+            return base, tokens[index + 1:]
+        if base == "git":
+            # ``git -C /path clone ...`` puts options before the subcommand.
+            rest = tokens[index + 1:]
+            if any(tok in _GIT_REMOTE_SUBCOMMANDS for tok in rest):
+                return "git", rest
+            return "", []
+    return "", []
+
+
+def _host_slot(args: list[str]) -> str:
+    """Return the first positional argument, honouring flags that take a value."""
+    skip_next = False
+    for token in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("-"):
+            if token in _VALUE_FLAGS:
+                skip_next = True
+            continue
+        if token.isdigit():
+            continue
+        return token
+    return ""
+
+
+def _split_host_token(token: str) -> tuple[str, int | None]:
+    """Split ``user@host[:port][/path]`` or ``host:port`` into (host, port)."""
+    text = str(token or "").strip().strip(",")
+    if "://" in text:
+        try:
+            text = urlsplit(text).netloc or text
+        except ValueError:
+            return "", None
+    if "@" in text:
+        text = text.rsplit("@", 1)[1]
+    port: int | None = None
+    if ":" in text:
+        head, tail = text.rsplit(":", 1)
+        if tail.isdigit():
+            text, port = head, int(tail)
+        else:
+            text = text.split(":", 1)[0]
+    return text.split("/", 1)[0].strip("[]"), port
 
 
 def _has_control_chars(value: str) -> bool:
@@ -403,11 +482,15 @@ class Scope:
         return Decision(True, "no explicit out-of-scope literal found", command)
 
     def _command_host_candidates(self, command: str) -> list[tuple[str, int | None]]:
-        """Extract non-IP hostnames a shell command would contact, best-effort.
+        """Extract hostnames a shell command would contact, one sub-command at a time.
 
-        Covers UNC paths, ``user@host``, ``-h/--host`` flags, ``host:port``, and
-        the trailing positional argument of network tools. Returns at most
-        ``_MAX_COMMAND_HOSTS`` unique candidates, IP literals excluded.
+        Handles chained commands (``&&``/``;``/``|``), common wrappers
+        (``sudo``/``timeout``/``sshpass``/``proxychains``/``env``), ``user@host``,
+        ``-h``/``--host[=]``/``-hHOST`` flags, UNC shares and any ``scheme://`` URI.
+
+        For commands whose host is positional (ssh/scp/rsync/nc/dig/...), only the
+        host slot is inspected, so a local file name (``loot.txt``) can never be
+        mistaken for a target. Returns at most ``_MAX_COMMAND_HOSTS`` unique hosts.
         """
         found: list[tuple[str, int | None]] = []
 
@@ -424,39 +507,65 @@ class Scope:
                 pass
             if not _FQDN.fullmatch(host):
                 return
+            if "." in host and host.rsplit(".", 1)[1] in _NON_HOST_SUFFIXES:
+                return  # loot.txt, dump.sql, config.json, ...
+            if Path(host).exists():
+                return  # a real local file
             if port is not None and not (0 < port <= 65535):
                 port = None
             if (host, port) not in found:
                 found.append((host, port))
 
-        tokens = command.split()
-        tool = tokens[0].rsplit("/", 1)[-1] if tokens else ""
-        gated = tool in _HOST_POSITIONAL_TOOLS or tool.startswith("impacket-")
-        if tool == "git":
-            gated = len(tokens) > 1 and tokens[1] in _HOST_GIT_SUBCOMMANDS
-
+        for match in _URI.findall(command):
+            add(match)
         for match in _UNC.findall(command):
             add(match)
-        for host, port in _HOST_PORT.findall(command):
-            add(host, int(port) if port.isdigit() else None)
+        for match in _HOST_FLAG_EQ.findall(command):
+            add(match)
+        for match in _HOST_SHORT_JOINED.findall(command):
+            add(match)
 
-        # ``user@host`` also appears in e-mail payloads (``--data email=a@b.tld``),
-        # so only treat it as a target when the command is a network client.
-        if gated:
-            for _user, host in _USER_HOST.findall(command):
-                add(host)
-            for host in _HOST_FLAG.findall(command):
-                add(host)
-
-        if gated:
-                for token in reversed(tokens[1:]):
-                    if token.startswith("-"):
+        for segment in _SEGMENT_SPLIT.split(command or ""):
+            tokens = segment.split()
+            if not tokens:
+                continue
+            tool, args = _locate_network_tool(tokens)
+            if not tool:
+                continue
+            if tool in _SSH_FAMILY:
+                # Only the host slot: trailing arguments are remote commands or
+                # local file names (``ssh h cat x.json``, ``scp h:loot.txt loot.txt``).
+                slot = _host_slot(args)
+                if slot:
+                    host, port = _split_host_token(slot)
+                    add(host, port)
+                for user_host in _USER_HOST.findall(segment):
+                    add(user_host[1])
+            elif tool in _HOST_SLOT:
+                slot = _host_slot(args)
+                if slot:
+                    host, port = _split_host_token(slot)
+                    add(host, port)
+                # Some take a protocol first (``crackmapexec smb host``); the
+                # suffix/exists filters keep local file names out.
+                for token in args:
+                    if token.startswith("-") or token.isdigit():
                         continue
-                    if "@" in token:
-                        break
-                    candidate = token.split(":", 1)[0]
-                    add(candidate)
-                    break
+                    host, port = _split_host_token(token)
+                    add(host, port)
+            else:
+                for match in _USER_HOST.findall(segment):
+                    add(match[1])
+                for match in _HOST_FLAG_SPACE.findall(segment):
+                    add(match)
+                for match in _HOST_PORT.findall(segment):
+                    add(match[0], int(match[1]) if match[1].isdigit() else None)
+                if tool in _SCAN_FAMILY or tool in _DB_FAMILY:
+                    for token in args:
+                        if token.startswith("-"):
+                            continue
+                        host, port = _split_host_token(token)
+                        add(host, port)
         return found[:_MAX_COMMAND_HOSTS]
 
     def pinned_addresses(self) -> dict[str, str]:

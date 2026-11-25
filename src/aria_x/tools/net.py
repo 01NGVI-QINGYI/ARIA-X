@@ -204,7 +204,8 @@ def _http_request(ctx: ToolContext, *, method: str, url: str, headers: dict[str,
                                              _ScopedRedirectHandler(ctx, redirects))
         try:
             # Contact exactly the address that scope authorized (see tools.dnspin).
-            with pin_resolution(ctx.scope.pinned_addresses()):
+            pins = getattr(ctx.scope, "pinned_addresses", None)
+            with pin_resolution(pins() if callable(pins) else None):
                 resp = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # non-2xx is still a usable observation
             resp = exc

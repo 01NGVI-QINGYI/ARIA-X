@@ -107,7 +107,7 @@ c0671b4a0af0e0b75d2111b3fc0bacf78dc39957edcd95aef3c67d23a42b246d  ./src/aria_x/w
 0c8b784727386de05afd8c940bf119cef63298556564bde17604197ad6ec75fe  ./src/aria_x/web/index.html
 2fca3bb9722a272673d4a33dc4a9757133e4d887fdeff7aec49c5b4ed22003fe  ./src/aria_x/web/style.css
 1f44cd75986c687bb1d703c49bc6ca66f58b66f5997604a17f6983ad3beda12c  ./tests/test_agent_loop.py
-a94a00498353e80881467203a75573065d822f37c2a23732d610e18ce2e29c32  ./tests/test_api.py
+627a364f40321ec38f5bbd336117b963361a642c37f35b5e9e6ccb41e78ac643  ./tests/test_api.py
 b94d8db1b0e860e4cb2af4beac76fca0311d4bffa7c72ec0f6d10f0d2987db5a  ./tests/test_approval.py
 5375f3a17c97fe4db39acb6ba1692df31917b9bf54db00532d2a04e3a41c03b8  ./tests/test_cli_doctor.py
 29613678de1babb3f9dd3de7dfa7aea6f5a2e297f3279b7ce112af59803fa383  ./tests/test_cli_report.py

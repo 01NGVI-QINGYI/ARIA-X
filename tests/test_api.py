@@ -202,8 +202,16 @@ class ServerTestCase(unittest.TestCase):
             "CUSTOM_VAR": "synth-env-opaque",
         }
         self.config.sandbox.extra_args = ["-e", "ARG_SECRET=synth-arg-val"]
-        self.config.scope.targets = ["127.0.0.1", "https://u1:p1@lab.example.test/app?tok=qsecret"]
-        self.config.scope.deny = ["https://u2:p2@deny.example.test/admin?tok=dsecret"]
+        # Long, distinctive userinfo: a 2-character marker would collide with the
+        # random 8-character suffix of the test's temporary directory name, which
+        # appears in data_dir/runs_dir and made this assertion flaky (~2%/run).
+        self.config.scope.targets = [
+            "127.0.0.1",
+            "https://scopetargetuser:scopetargetpass@lab.example.test/app?tok=qsecret",
+        ]
+        self.config.scope.deny = [
+            "https://scopedenyuser:scopedenypass@deny.example.test/admin?tok=dsecret",
+        ]
 
         status, body = self.json_request("GET", "/api/config", token="supersecret-token")
         self.assertEqual(status, 200)
@@ -241,7 +249,8 @@ class ServerTestCase(unittest.TestCase):
             "custom_token", "synth-body-secret", "opaque_field", "synth-nested-secret",
             "GH_TOKEN", "synth-gh-secret", "CUSTOM_VAR", "synth-env-opaque",
             "ARG_SECRET", "synth-arg-val",
-            "u1", "p1", "qsecret", "u2", "p2", "dsecret",
+            "scopetargetuser", "scopetargetpass", "qsecret",
+            "scopedenyuser", "scopedenypass", "dsecret",
         ):
             self.assertNotIn(forbidden, dumped)
 

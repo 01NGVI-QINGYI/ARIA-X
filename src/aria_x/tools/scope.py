@@ -434,7 +434,9 @@ class Scope:
 
         if ips:
             with self._pinned_lock:
-                self._pinned[host] = str(ips[0])
+                # Keep the first address: re-authorizing the same host must not
+                # quietly move the pin to a later (attacker-influenced) answer.
+                self._pinned.setdefault(host, str(ips[0]))
         return Decision(True, "", target, host, port, ips)
 
     def _matches_host_or_net(self, host: str, port: int | None, ips: Sequence[str]) -> bool:

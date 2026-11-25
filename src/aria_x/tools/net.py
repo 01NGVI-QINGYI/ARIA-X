@@ -205,7 +205,9 @@ def _http_request(ctx: ToolContext, *, method: str, url: str, headers: dict[str,
         try:
             # Contact exactly the address that scope authorized (see tools.dnspin).
             pins = getattr(ctx.scope, "pinned_addresses", None)
-            with pin_resolution(pins() if callable(pins) else None):
+            # Pass the getter, not a snapshot: a redirect hop authorizes a new
+            # address mid-request and that address must be used for the hop.
+            with pin_resolution(pins if callable(pins) else None):
                 resp = opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:  # non-2xx is still a usable observation
             resp = exc
@@ -305,7 +307,7 @@ def dns_lookup(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     if record_type not in {"A", "AAAA", "PTR", "ANY"}:
         return ToolResult.failure("record_type must be one of A, AAAA, PTR, ANY",
                                   data={"record_type": record_type})
-    ctx.scope.require_host(host)
+    decision = ctx.scope.require_host(host)
     ctx.scope.acquire_slot(host)
     started = time.monotonic()
     if record_type == "PTR":
@@ -374,7 +376,7 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     host = str(kwargs.get("host") or "").strip()
     if not host:
         return ToolResult.failure("host is required")
-    ctx.scope.require_host(host)
+    decision = ctx.scope.require_host(host)
     max_ports = clamp_int(kwargs.get("max_ports"), 1, int(ctx.config.scope.max_ports or 200), 64)
     default_ports = list(ctx.config.scope.ports or [80, 443])
     ports = _parse_ports(kwargs.get("ports"), max_ports, default_ports)
@@ -384,8 +386,19 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     want_banners = bool(kwargs.get("banners", False))
     started = time.monotonic()
 
+    # connect_ex() resolves in C, so the pinned address must be passed literally:
+    # a thread-local getaddrinfo wrapper cannot influence it.
+    pinned = {}
+    getter = getattr(ctx.scope, "pinned_addresses", None)
+    if callable(getter):
+        try:
+            pinned = getter() or {}
+        except Exception:
+            pinned = {}
+    target = (decision.ips[0] if getattr(decision, "ips", None)
+              else pinned.get(host.lower().rstrip("."), host))
     try:
-        infos = socket.getaddrinfo(host, ports[0], socket.AF_UNSPEC, socket.SOCK_STREAM)
+        infos = socket.getaddrinfo(target, ports[0], socket.AF_UNSPEC, socket.SOCK_STREAM)
         family = infos[0][0] if infos else socket.AF_INET
     except (OSError, socket.gaierror) as exc:
         audit(ctx, "port_scan", "error", host, {"error": str(exc)})
@@ -396,7 +409,7 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
         sock = socket.socket(family, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         try:
-            if sock.connect_ex((host, port)) != 0:
+            if sock.connect_ex((target, port)) != 0:
                 return None
             banner = ""
             if want_banners:
@@ -445,7 +458,9 @@ def tls_probe(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
         if not verify:
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-        raw = socket.create_connection((host, port), timeout=timeout)
+        pins = getattr(ctx.scope, "pinned_addresses", None)
+        with pin_resolution(pins if callable(pins) else None):
+            raw = socket.create_connection((host, port), timeout=timeout)
         try:
             tls = context.wrap_socket(raw, server_hostname=host)
         except Exception:

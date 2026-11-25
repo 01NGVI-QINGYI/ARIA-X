@@ -36,6 +36,9 @@ except ModuleNotFoundError:  # pragma: no cover - only on older interpreters
     _toml = None
 
 _REDACTED_SENTINEL = "***"
+
+# Fields that hold derived/runtime state and must never be loaded from a file.
+_INTERNAL_FIELDS = frozenset({"unknown_keys"})
 _REDACTED_EXPORT_KEY = "_redacted_export"
 
 
@@ -196,6 +199,8 @@ class AriaXConfig:
                     raise ConfigError(f"config section '{key}' must be a table/object")
                 unknown = _apply_section(section, value)
                 cfg.unknown_keys.extend(f"{key}.{name}" for name in unknown)
+            elif key in _INTERNAL_FIELDS:
+                continue  # derived state, never read from a config file
             elif hasattr(cfg, key):
                 setattr(cfg, key, value)
             else:
@@ -207,9 +212,14 @@ class AriaXConfig:
             if value is None:
                 continue
             if key in {"llm", "budget", "sandbox", "scope", "safety", "server", "engine"} and isinstance(value, Mapping):
-                _apply_section(getattr(self, key), value)
+                unknown = _apply_section(getattr(self, key), value)
+                self.unknown_keys.extend(f"{key}.{name}" for name in unknown)
+            elif key in _INTERNAL_FIELDS:
+                continue
             elif hasattr(self, key):
                 setattr(self, key, value)
+            else:
+                self.unknown_keys.append(str(key))
 
     def apply_env(self, env: Mapping[str, str]) -> None:
         if env.get("ARIA_X_PROVIDER"):

@@ -584,3 +584,26 @@ class UnimplementedConfigKeyTests(unittest.TestCase):
         self.assertTrue(entry["ok"])
         self.assertIn("engine.skills_dir", entry["warning"])
         self.assertIn(rc, (0, 1))
+
+class InternalConfigFieldTests(unittest.TestCase):
+    """Derived state must not be settable from a config file."""
+
+    def test_unknown_keys_cannot_be_overridden_from_a_config(self) -> None:
+        import tempfile
+        from pathlib import Path
+        tmp = tempfile.mkdtemp()
+        path = Path(tmp) / "cfg.toml"
+        path.write_text(
+            'unknown_keys = "oops"\n'
+            "[scope]\nauthorized = true\ntargets = [\"127.0.0.1\"]\n"
+            "[llm]\nprovider = \"mock\"\n"
+            "[engine]\nskills_dir = \"x\"\n",
+            encoding="utf-8",
+        )
+        cfg = AriaXConfig.load(path)  # must not raise AttributeError
+        self.assertIn("engine.skills_dir", cfg.unknown_keys)
+
+    def test_merge_records_unknown_keys(self) -> None:
+        cfg = AriaXConfig()
+        cfg.merge({"engine": {"bogus": 1}})
+        self.assertIn("engine.bogus", cfg.unknown_keys)

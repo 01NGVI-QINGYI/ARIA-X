@@ -144,3 +144,28 @@ class DockerDestructivePolicyTests(unittest.TestCase):
         for cmd in ("docker ps", "docker run -it alpine sh", "docker compose up -d",
                     "docker logs -f target", "docker exec -it target sh"):
             self.assertTrue(self.policy.check(cmd).allowed, cmd)
+
+class DockerShellFormVariantsTests(unittest.TestCase):
+    """Shell spelling variants must not defeat the docker teardown rules."""
+
+    def setUp(self) -> None:
+        self.policy = CommandPolicy(block_destructive=True)
+
+    def test_command_substitution_and_backticks_are_blocked(self) -> None:
+        for cmd in ("docker rm -f $(docker ps -aq)",
+                    "docker rm -f `docker ps -aq`",
+                    "docker container rm -f $(docker container ls -aq)",
+                    "docker image rm -f $(docker image ls -q)",
+                    "docker volume rm $(docker volume ls -q)"):
+            self.assertFalse(self.policy.check(cmd).allowed, cmd)
+
+    def test_piped_xargs_is_blocked(self) -> None:
+        self.assertFalse(self.policy.check("docker ps -aq | xargs docker rm -f").allowed)
+
+    def test_buildx_prune_is_blocked(self) -> None:
+        self.assertFalse(self.policy.check("docker buildx prune -af").allowed)
+
+    def test_inspection_commands_stay_allowed(self) -> None:
+        for cmd in ("docker ps", "docker image ls", "docker compose up -d",
+                    "docker logs -f target", "docker exec -it target sh"):
+            self.assertTrue(self.policy.check(cmd).allowed, cmd)

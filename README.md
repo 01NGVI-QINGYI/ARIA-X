@@ -25,8 +25,8 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-301%20passing-brightgreen">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
+  <img alt="tests" src="https://img.shields.io/badge/tests-329%20passing-brightgreen">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-orange">
 </p>
 
 ---
@@ -372,7 +372,7 @@ ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执�
 ### 2. 当前版本的设计定位
 - **模型推理与证据相结合**：模型负责提出探索方向，工具输出与记录的证据支撑发现；复杂结论仍需研究者核验。
 - **分层执行控制**：`CommandPolicy` 提供启发式命令过滤；进程级隔离可使用 Docker 后端（示例配置与 `aria-x init` 模板预设 `network = "none"`，程序内置默认值为 `bridge`）。命令过滤本身不等于操作系统沙箱。
-- **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.2.1 的实现范围。
+- **专注本地研究**：SQLite WAL 适用于单机实验和小规模协作；分布式集群调度不属于 v0.3.0 的实现范围。
 - **面向验证的工具集**：内置工具聚焦受控验证、状态管理与报告，不打包独立漏洞利用载荷或第三方扫描器。
 - **明确的演进方向**：专用 Prompt Injection 分类器和中断运行的原位恢复尚未实现，相关计划见 [开发路线图](docs/ROADMAP.md)。
 
@@ -408,13 +408,13 @@ ARIA-X 将目标范围控制、风险操作审批和运行审计融入工具执�
 ### Docker 运行
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.2.1 .
+docker build -f docker/Dockerfile -t aria-x:0.3.0 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.2.1
+  aria-x:0.3.0
 ```
 
 容器镜像仅包含 ARIA-X 标准库核心代码，不打包任何第三方扫描器。使用 `docker/docker-compose.yml` 启动时，必须显式设置非空环境变量 `ARIA_X_AUTH_TOKEN`（未设置或为空将拒绝启动）。详细部署说明见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
@@ -422,7 +422,7 @@ docker run --rm -p 127.0.0.1:8787:8787 \
 ### 测试与离线验证门
 
 ```bash
-bash scripts/verify.sh          # 运行全部 301 个单元测试 + 离线端到端 demo（无需网络与 API Key）
+bash scripts/verify.sh          # 运行全部 329 个单元测试 + 离线端到端 demo（无需网络与 API Key）
 bash scripts/dev.sh test        # 仅运行单元测试
 bash scripts/dev.sh doctor      # 运行环境自检
 ```
@@ -449,7 +449,7 @@ ARIA-X/
 │   ├── report/                # Markdown / HTML / findings.json 报告渲染器
 │   ├── server/                # ThreadingHTTPServer REST API 与 SSE 服务端
 │   └── web/                   # 零 CDN 本地控制台前端（HTML/CSS/JS）
-├── tests/                     # 301 个单元与集成测试
+├── tests/                     # 329 个单元与集成测试
 ├── examples/                  # 本机离线教学靶场、演示配置与确定性剧本
 ├── configs/                   # 配置文件模板
 └── docs/                      # 架构、融合映射、工具手册、安全模型、部署与路线图
@@ -525,5 +525,5 @@ ARIA-X 将 **ARTEX、Cairn 与 PentAGI** 的架构思想整合到独立的 Pytho
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.2.1 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · 仅限本地隔离环境学习与研究</sub>
+  <sub>ARIA-X v0.3.0 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · 仅限本地隔离环境学习与研究</sub>
 </p>

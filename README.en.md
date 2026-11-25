@@ -25,8 +25,8 @@
   <img alt="license" src="https://img.shields.io/badge/license-AGPL--3.0-blue">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-3776AB">
   <img alt="dependencies" src="https://img.shields.io/badge/dependencies-standard%20library%20only-2ea44f">
-  <img alt="tests" src="https://img.shields.io/badge/tests-301%20passing-brightgreen">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-orange">
+  <img alt="tests" src="https://img.shields.io/badge/tests-329%20passing-brightgreen">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-orange">
 </p>
 
 ---
@@ -372,9 +372,9 @@ ARIA-X integrates target scoping, risk-based approvals, and execution auditing i
 ### 2. Current Design Scope
 - **Model reasoning backed by evidence**: LLMs guide exploration, while inspectable tool outputs and recorded evidence support findings. Researchers should verify complex conclusions.
 - **Layered execution controls**: `CommandPolicy` applies heuristic command filtering. For process isolation, use the Docker backend (example config and `aria-x init` template set `network = "none"`; the in-code `SandboxConfig` default is `"bridge"`); command filtering alone is not an OS-level sandbox.
-- **Focused on local research**: SQLite WAL persistence supports local experiments and small-team workflows. Distributed scheduling is outside the v0.2.1 feature set.
+- **Focused on local research**: SQLite WAL persistence supports local experiments and small-team workflows. Distributed scheduling is outside the v0.3.0 feature set.
 - **Purpose-built orchestration**: The built-in toolkit focuses on scoped validation, state management, and reporting rather than bundling exploit payloads or third-party scanners.
-- **Clear development roadmap**: Dedicated prompt-injection classification and crash-resume of in-progress engagements are not implemented in v0.2.1; see [Roadmap](docs/ROADMAP.md).
+- **Clear development roadmap**: Dedicated prompt-injection classification is not implemented in v0.3.0; interrupted engagements can be continued with `aria-x run --resume`; see [Roadmap](docs/ROADMAP.md).
 
 See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model and vulnerability disclosure policy, and [docs/ROADMAP.md](docs/ROADMAP.md) for planned work.
 
@@ -408,13 +408,13 @@ Every run writes three self-contained artifacts to `runs/<run_id>/`:
 ### Docker
 
 ```bash
-docker build -f docker/Dockerfile -t aria-x:0.2.1 .
+docker build -f docker/Dockerfile -t aria-x:0.3.0 .
 mkdir -p data runs
 docker run --rm -p 127.0.0.1:8787:8787 \
   --user "$(id -u):$(id -g)" \
   -e ARIA_X_AUTH_TOKEN="$(openssl rand -hex 16)" \
   -v "$PWD/data:/app/data" -v "$PWD/runs:/app/runs" \
-  aria-x:0.2.1
+  aria-x:0.3.0
 ```
 
 The container image packages only ARIA-X's Python standard-library core without third-party scanners. Deploying with `docker/docker-compose.yml` requires an explicit non-empty `ARIA_X_AUTH_TOKEN` (Compose fails fast if unset or empty). See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for details.
@@ -422,7 +422,7 @@ The container image packages only ARIA-X's Python standard-library core without 
 ### Verification & Self-Check Scripts
 
 ```bash
-bash scripts/verify.sh          # runs all 301 unit tests + offline end-to-end demo (no network or API key)
+bash scripts/verify.sh          # runs all 329 unit tests + offline end-to-end demo (no network or API key)
 bash scripts/dev.sh test        # runs the unit test suite only
 bash scripts/dev.sh doctor      # runs environment diagnostics
 ```
@@ -449,7 +449,7 @@ ARIA-X/
 │   ├── report/                # Markdown / HTML / findings.json renderers
 │   ├── server/                # ThreadingHTTPServer REST API and SSE stream
 │   └── web/                   # zero-CDN local web console (HTML/CSS/JS)
-├── tests/                     # 301 unit and integration tests
+├── tests/                     # 329 unit and integration tests
 ├── examples/                  # local offline demo target, config, and scenario script
 ├── configs/                   # example configuration files
 └── docs/                      # architecture, fusion mapping, tools, security, deployment, roadmap
@@ -525,5 +525,5 @@ This software is provided **"AS IS"**, without warranty of any kind, express or 
 ---
 
 <p align="center">
-  <sub>ARIA-X v0.2.1 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · Local, isolated study and research only</sub>
+  <sub>ARIA-X v0.3.0 · AGPL-3.0-or-later · Project by 01NGVI-QINGYI · Local, isolated study and research only</sub>
 </p>

@@ -44,11 +44,29 @@ change, but persisted schema changes will include a migration note.
   (final answer synthesis, the doctor probe, JSON repair). A truncated or non-SSE
   response is raised as a retryable error instead of being returned as success.
 
+### Fixes from independent review
+
+- Report graphs now derive `asset -> finding` edges from `anchors` (findings hold
+  an intent id in `parent_id`, so every finding was previously drawn from the
+  first asset), SVG labels no longer leak the truncate marker, and no edge is
+  invented when an asset is missing.
+- Shell host extraction handles chained commands, wrappers, positional hosts and
+  `--host=`/`-hHOST` forms, and no longer treats local file names as targets.
+- Resume carries recorded usage into the budget, reopens abandoned `active`
+  intents, clears `ended_at`, validates run/project ownership, and accepts
+  `budget`/`cancelled` runs.
+- DNS pinning covers redirect hops and `tls_probe`/`port_scan`, and keeps the
+  first resolved address per host.
+- Streaming raises a retryable error on truncated/non-SSE responses; tool-free
+  calls stream, tool-carrying calls do not.
+- Docker teardown rules cover backticks, `xargs`, `container/image` subcommands
+  and `buildx prune`; internal config fields can no longer be set from a file.
+
 ### Notes
 
 - `save()`/`export_public()` write only new files; `save_private("<path>.json")`
   remains the reloadable, `0o600` path (unchanged from 0.2.1).
-- Test count: 301 (was 269).
+- Test count: 329 (was 269).
 
 ## [0.2.1] — 2026-11-23
 

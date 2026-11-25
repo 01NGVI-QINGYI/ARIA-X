@@ -42,12 +42,13 @@ _DESTRUCTIVE_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(curl|wget)\b[^\n|]*\|\s*(sudo\s+)?(bash|sh)\b"), "pipe remote content to a shell"),
     (re.compile(r">\s*/dev/(sd|nvme|disk|rdisk)"), "raw device overwrite"),
     (re.compile(r"\bhistory\s+-c\b"), "audit trail destruction"),
-    (re.compile(r"\bdocker\s+(?:rm|rmi|kill|stop)\b[^\n]*\$\(\s*docker\s+"
-                r"(?:ps|images|container\s+ls)"), "mass container/image removal"),
-    (re.compile(r"\bdocker\s+(?:system|container|volume|image|network|builder)\s+prune\b"),
-     "destructive docker prune"),
-    (re.compile(r"\bdocker\s+volume\s+rm\b[^\n]*\$\(\s*docker\s+volume\s+ls"),
-     "mass docker volume removal"),
+    (re.compile(r"\bdocker\s+(?:container\s+|image\s+|volume\s+)?(?:rm|rmi|kill|stop)\b"
+                r"[^\n]*(?:\$\(\s*|`\s*)docker\s+(?:ps|images|container\s+ls|image\s+ls|volume\s+ls)"),
+     "mass container/image removal"),
+    (re.compile(r"\|\s*xargs\b[^\n]*\bdocker\s+(?:container\s+|image\s+|volume\s+)?"
+                r"(?:rm|rmi|kill|stop)\b"), "piped mass docker removal"),
+    (re.compile(r"\bdocker\s+(?:system|container|volume|image|network|builder|buildx)\s+prune\b"),
+     "destructive docker prune")
 )
 
 

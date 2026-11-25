@@ -691,9 +691,12 @@ class Api:
                     continue
                 if event.project_id and event.project_id != project_id:
                     continue
-                if event.id in seen:
-                    continue
-                _remember(event.id)
+                # Transient frames carry no id; they are never deduped (and never
+                # become a resume cursor).
+                if event.id:
+                    if event.id in seen:
+                        continue
+                    _remember(event.id)
                 yield _sse_event(event)
         finally:
             subscription.close()

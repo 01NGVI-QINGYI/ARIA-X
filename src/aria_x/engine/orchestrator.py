@@ -188,10 +188,11 @@ class Orchestrator:
 
         # A resumed run continues the budget it already spent: elapsed time and
         # the intent allowance come back from the persisted snapshot.
-        self.budget = (Budget.from_snapshot(self.config.budget, run.budget)
+        snapshot = dict(run.budget or {}) if resume else {}
+        self.budget = (Budget.from_snapshot(self.config.budget, snapshot)
                        if resume else Budget(self.config.budget))
         if resume:
-            self._restore_progress(run)
+            self._restore_progress(run, snapshot_usage="usage" in snapshot)
         self.router = ModelRouter(self.config, budget=self.budget, events=self.events,
                                   project_id=project.id, run_id=run.id,
                                   provider=self.provider)
@@ -243,7 +244,7 @@ class Orchestrator:
             "scope": scope_note(project_scope or self._scope_dict()),
         })
 
-    def _restore_progress(self, run: Run) -> None:
+    def _restore_progress(self, run: Run, *, snapshot_usage: bool = False) -> None:
         """Carry persisted usage into the budget and unstick abandoned work.
 
         A crashed process leaves ``status='active'`` intents that the scheduler
@@ -252,7 +253,10 @@ class Orchestrator:
         keeps counting what was already spent.
         """
         usage = dict(getattr(run, "usage", None) or {})
-        if usage and self.budget is not None and self.budget.usage is not None:
+        # The budget snapshot and runs.usage hold the same numbers; merge only one
+        # of them or the resumed run counts its history twice.
+        if usage and not snapshot_usage and self.budget is not None \
+                and self.budget.usage is not None:
             self.budget.usage.merge(usage)
         project_id = getattr(self.project, "id", "")
         try:

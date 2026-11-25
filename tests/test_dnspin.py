@@ -261,3 +261,39 @@ class PinPoisoningTests(unittest.TestCase):
         self.assertTrue(allowed.allowed)
         self.assertEqual(s.pinned_addresses().get("rotate.test"), "127.0.0.2",
                          "the address of the current authorization wins")
+
+
+class PortScanAddressSelectionTests(unittest.TestCase):
+    """port_scan must use the address the authorization approved, not ips[0]."""
+
+    def test_multi_answer_scan_targets_the_permitted_address(self) -> None:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(4)
+        port = listener.getsockname()[1]
+        tmp = Path(tempfile.mkdtemp())
+        cfg = AriaXConfig(data_dir=str(tmp), runs_dir=str(tmp / "runs"))
+        cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.2/32"],
+                                allow_private=True, allow_loopback=True, max_rps=100, max_ports=8)
+        cfg.sandbox = SandboxConfig(backend="local")
+        cfg.safety = SafetyConfig(approval="auto")
+        scope = Scope(cfg.scope, allow_public_targets=True)
+        store = Store(":memory:")
+        bus = EventBus()
+        ctx = ToolContext(
+            project=SimpleNamespace(id="p"), run_id="r", workdir=tmp, config=cfg, scope=scope,
+            sandbox=sandbox_mod.build_sandbox(cfg.sandbox, tmp), store=store, events=bus,
+            agent="worker", role="worker", task_id=None,
+        )
+        try:
+            # .1 is outside the /32, .2 is inside: only .2 may be scanned.
+            with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1", "127.0.0.2"]):
+                result = net_tool.port_scan(
+                    ctx, {"host": "multi.test", "ports": str(port), "timeout": 0.3})
+            payload = result.data or {}
+            scanned = [item["port"] for item in payload.get("open_ports", [])]
+            self.assertNotIn(port, scanned,
+                             "port_scan must not probe an address that the rule rejected")
+        finally:
+            store.close()
+            listener.close()

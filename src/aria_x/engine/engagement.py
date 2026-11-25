@@ -227,19 +227,24 @@ class Engagement:
         project = self.store.get_project(project_id)
         self._assert_authorized(project)
         self._assert_no_active_run(project.id)
-        run = self._create_run(project_id)
-        handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
-        thread = threading.Thread(
-            target=self._background_main, args=(project, run, handle, goal),
-            name=f"aria-x-run-{run.id}", daemon=True)
-        handle.thread = thread
-        with self._lock:
-            self._runs[run.id] = handle
-        thread.start()
+        lock = self._acquire_project_lock(project.id)
+        try:
+            run = self._create_run(project_id)
+            handle = _RunHandle(run_id=run.id, project_id=project.id, cancel=threading.Event())
+            thread = threading.Thread(
+                target=self._background_main, args=(project, run, handle, goal, lock),
+                name=f"aria-x-run-{run.id}", daemon=True)
+            handle.thread = thread
+            with self._lock:
+                self._runs[run.id] = handle
+            thread.start()
+        except BaseException:
+            self._release_project_lock(lock)
+            raise
         return run.id
 
     def _background_main(self, project: Project, run: Run, handle: _RunHandle,
-                         goal: str | None = None) -> None:
+                         goal: str | None = None, lock: Any = None) -> None:
         outcome: RunOutcome | None = None
         try:
             outcome = self._execute(project, run, handle, goal=goal)
@@ -252,6 +257,7 @@ class Engagement:
         finally:
             handle.result = outcome
             handle.finished_at = time.monotonic()
+            self._release_project_lock(lock)
 
     def _execute(self, project: Project, run: Run, handle: _RunHandle, *,
                  goal: str | None, resume: bool = False) -> RunOutcome:
@@ -259,6 +265,36 @@ class Engagement:
             self.config, store=self.store, events=self.events,
             provider=self._resolve_provider(), cancel=handle.cancel)
         return orchestrator.run(project, run, goal=goal, resume=resume)
+
+    def _acquire_project_lock(self, project_id: str):
+        """Take the project lock and return its handle (None when unsupported)."""
+        if _fcntl is None:
+            return None
+        directory = Path(getattr(self.config, "data_dir", "data")) / "locks"
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        handle = open(directory / f"{project_id}.lock", "a+")
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError as exc:
+            handle.close()
+            raise ConfigError(
+                f"project {project_id} is already being run by another process") from exc
+        return handle
+
+    def _release_project_lock(self, handle) -> None:
+        if handle is None:
+            return
+        try:
+            _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            handle.close()
+        except OSError:
+            pass
 
     @contextlib.contextmanager
     def project_lock(self, project_id: str):
@@ -269,31 +305,11 @@ class Engagement:
         the very recovery it is meant to allow. The kernel releases the lock
         when the owner dies, keeping a crashed run resumable.
         """
-        if _fcntl is None:
-            yield
-            return
-        directory = Path(getattr(self.config, "data_dir", "data")) / "locks"
+        handle = self._acquire_project_lock(project_id)
         try:
-            directory.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            yield
-            return
-        handle = None
-        try:
-            handle = open(directory / f"{project_id}.lock", "a+")
-            try:
-                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
-            except OSError as exc:
-                raise ConfigError(
-                    f"project {project_id} is already being run by another process") from exc
             yield
         finally:
-            if handle is not None:
-                try:
-                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
-                except OSError:
-                    pass
-                handle.close()
+            self._release_project_lock(handle)
 
     def _assert_no_active_run(self, project_id: str) -> None:
         """One run per project at a time: two loops would duplicate intents."""

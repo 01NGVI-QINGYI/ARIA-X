@@ -66,7 +66,7 @@ change, but persisted schema changes will include a migration note.
 
 - `save()`/`export_public()` write only new files; `save_private("<path>.json")`
   remains the reloadable, `0o600` path (unchanged from 0.2.1).
-- Test count: 329 (was 269).
+- Test count: 346 (was 269).
 
 ## [0.2.1] — 2026-11-23
 

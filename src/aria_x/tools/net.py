@@ -395,8 +395,10 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
             pinned = getter() or {}
         except Exception:
             pinned = {}
-    target = (decision.ips[0] if getattr(decision, "ips", None)
-              else pinned.get(host.lower().rstrip("."), host))
+    # Prefer the address this authorization pinned: with multiple A records the
+    # first one may be outside the rule that matched.
+    target = (pinned.get(host.lower().rstrip("."))
+              or (decision.ips[0] if getattr(decision, "ips", None) else host))
     try:
         infos = socket.getaddrinfo(target, ports[0], socket.AF_UNSPEC, socket.SOCK_STREAM)
         family = infos[0][0] if infos else socket.AF_INET

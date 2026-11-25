@@ -181,3 +181,39 @@ class TransientEventCursorTests(unittest.TestCase):
         if emitted:
             self.assertNotIn("preview", emitted[0])
             self.assertFalse(any("secret" in str(v) for v in emitted[0].values()))
+
+
+class StreamFrameDeliveryTests(unittest.TestCase):
+    """Every progress frame must reach the client; dedupe is for real ids only."""
+
+    def _chunks(self, bus):
+        from aria_x.server.api import Api
+
+        api = object.__new__(Api)
+        api.bus = bus
+        api.heartbeat_seconds = 0.05
+        return api._event_chunks("p_test", replay=0)
+
+    def test_consecutive_progress_frames_are_all_delivered(self) -> None:
+        bus = EventBus(replay=10)
+        stream = self._chunks(bus)
+        next(stream)                     # retry/connected preamble
+        bus.emit_transient("llm_delta", project_id="p_test", data={"chars": 1})
+        bus.emit_transient("llm_delta", project_id="p_test", data={"chars": 2})
+        bus.emit_transient("llm_delta", project_id="p_test", data={"chars": 3})
+        frames = [next(stream) for _ in range(3)]
+        stream.close()
+        self.assertEqual(len(frames), 3)
+        for index, frame in enumerate(frames, start=1):
+            self.assertIn(f'"chars": {index}'.encode(), frame)
+            self.assertNotIn(b"id:", frame)
+
+    def test_persisted_duplicate_ids_are_still_deduped(self) -> None:
+        bus = EventBus(replay=10)
+        stream = self._chunks(bus)
+        next(stream)
+        event = bus.emit("log", project_id="p_test", data={"message": "once"})
+        bus._recent.append(event)        # a duplicate of the same id
+        first = next(stream)
+        stream.close()
+        self.assertIn(b"id:", first)

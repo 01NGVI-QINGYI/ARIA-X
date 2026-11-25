@@ -239,3 +239,64 @@ class ResumeSelectionPolicyTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.engagement.resume()          # hints at the id instead of silently restarting
         self.assertEqual(self.engagement.resume(run.id).run_id, run.id)
+
+
+class BackgroundEntryLockTests(unittest.TestCase):
+    """The web console's entry point must honour the same project lock."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AriaXConfig(data_dir=str(self.tmp / "data"), runs_dir=str(self.tmp / "runs"))
+        self.cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.1"],
+                                     allow_loopback=True, max_rps=100)
+        self.cfg.llm = LLMConfig(provider="mock")
+        self.cfg.sandbox = SandboxConfig(backend="local")
+        self.cfg.safety = SafetyConfig(approval="auto")
+        self.store = Store(":memory:")
+        self.bus = EventBus()
+        self.first = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.second = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.project = self.first.create_project("bg", "prove it")
+
+    def tearDown(self) -> None:
+        self.first.close()
+        self.second.close()
+        self.store.close()
+
+    def test_start_background_is_refused_while_locked(self) -> None:
+        with self.first.project_lock(self.project.id):
+            with self.assertRaises(ConfigError):
+                self.second.start_background(self.project.id)
+
+
+class ResumeUsageAccountingTests(unittest.TestCase):
+    """Persisted usage must be counted once, not once per storage location."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AriaXConfig(data_dir=str(self.tmp / "data"), runs_dir=str(self.tmp / "runs"))
+        self.cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.1"],
+                                     allow_loopback=True, max_rps=100)
+        self.cfg.llm = LLMConfig(provider="mock")
+        self.cfg.sandbox = SandboxConfig(backend="local")
+        self.cfg.safety = SafetyConfig(approval="auto")
+        self.store = Store(":memory:")
+        self.bus = EventBus()
+        self.engagement = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.project = self.engagement.create_project("usage", "prove it")
+
+    def tearDown(self) -> None:
+        self.engagement.close()
+        self.store.close()
+
+    def test_usage_is_not_double_counted(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="running"))
+        usage = {"llm_calls": 9, "tool_calls": 7, "prompt_tokens": 1000, "completion_tokens": 200}
+        # Real persistence writes the same numbers to both places.
+        self.store.update_run(run.id, usage=dict(usage),
+                              budget={"elapsed_seconds": 50.0, "intents_started": 3,
+                                      "usage": dict(usage)})
+        self.engagement.resume(run.id)
+        after = self.store.get_run(run.id).usage
+        self.assertEqual(after.get("tool_calls"), 7,
+                         "tool calls must be counted once, not once per storage location")

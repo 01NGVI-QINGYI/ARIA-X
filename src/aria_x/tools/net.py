@@ -136,6 +136,27 @@ def _save_evidence(ctx: ToolContext, payload: dict[str, Any], prefix: str = "htt
         return None
 
 
+def _verified_target(ctx: ToolContext, decision: Any, host: str,
+                     port: int | None = None) -> str:
+    """Return the address this authorization approved, or refuse to connect.
+
+    A hostname that produced no address during authorization has not passed the
+    IP-level checks (deny networks, private/public policy). Resolving it later at
+    connect time would let that address bypass those checks, so such a request is
+    rejected instead of being resolved on the fly.
+    """
+    if not getattr(decision, "ips", None):
+        raise ScopeViolation(
+            f"cannot verify the address of '{host}'; refusing to connect without an "
+            f"address-level authorization (check scope.allow_public_targets and DNS)",
+            target=host, host=host, port=port)
+    approved = ""
+    approver = getattr(ctx.scope, "approved_address", None)
+    if callable(approver):
+        approved = approver(decision.host or host, decision.port or port, decision.ips)
+    return approved or str(decision.ips[0])
+
+
 class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Follow a redirect only when the *destination* is still authorized.
 
@@ -159,9 +180,9 @@ class _ScopedRedirectHandler(urllib.request.HTTPRedirectHandler):
             raise ScopeViolation("redirect target contains invalid characters", target=raw_new)
         absolute = urllib.parse.urljoin(req.full_url, raw_new)
         decision = self.ctx.scope.require_url(absolute, "GET")
-        approved = self.ctx.scope.approved_address(
-            decision.host, decision.port, decision.ips or ())
-        if approved and decision.host:
+        approved = _verified_target(self.ctx, decision, decision.host or absolute,
+                                    decision.port)
+        if decision.host:
             self.pins[decision.host.lower().rstrip(".")] = approved
         self.ctx.scope.acquire_slot(decision.host or "")
         # Never forward credentials to a different origin (urllib would).
@@ -209,8 +230,8 @@ def _http_request(ctx: ToolContext, *, method: str, url: str, headers: dict[str,
         request = urllib.request.Request(decision.target or url, data=data, headers=request_headers, method=method)
         # No environment proxies, and redirects are scope-checked hop by hop.
         request_pins: dict[str, str] = {}
-        approved = ctx.scope.approved_address(decision.host, decision.port, decision.ips or ())
-        if approved and decision.host:
+        approved = _verified_target(ctx, decision, host, decision.port)
+        if decision.host:
             request_pins[decision.host.lower().rstrip(".")] = approved
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
@@ -402,10 +423,7 @@ def port_scan(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
     # a thread-local getaddrinfo wrapper cannot influence it.
     # This decision's approved address; never another request's pin, and never
     # an ips[0] that fell outside the CIDR the operator declared.
-    approver = getattr(ctx.scope, "approved_address", None)
-    target = (approver(host, None, getattr(decision, "ips", ()) or ())
-              if callable(approver) else "")
-    target = target or (decision.ips[0] if getattr(decision, "ips", None) else host)
+    target = _verified_target(ctx, decision, host, None)
     try:
         infos = socket.getaddrinfo(target, ports[0], socket.AF_UNSPEC, socket.SOCK_STREAM)
         family = infos[0][0] if infos else socket.AF_INET
@@ -467,11 +485,8 @@ def tls_probe(ctx: ToolContext, kwargs: dict[str, Any]) -> ToolResult:
         if not verify:
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-        approved = ""
-        approver = getattr(ctx.scope, "approved_address", None)
-        if callable(approver):
-            approved = approver(host, port, getattr(decision, "ips", ()) or ())
-        with pin_resolution({host.lower().rstrip("."): approved} if approved else None):
+        approved = _verified_target(ctx, decision, host, port)
+        with pin_resolution({host.lower().rstrip("."): approved}):
             raw = socket.create_connection((host, port), timeout=timeout)
         try:
             tls = context.wrap_socket(raw, server_hostname=host)

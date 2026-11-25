@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from aria_x.config import AriaXConfig, SafetyConfig, SandboxConfig, ScopeConfig
+from aria_x.errors import ScopeViolation
 from aria_x.events import EventBus
 from aria_x.store import Store
 from aria_x.tools import net as net_tool
@@ -379,3 +380,79 @@ class RequestScopedPinMapTests(unittest.TestCase):
         approved = s.approved_address(decision.host, decision.port, decision.ips)
         self.assertEqual(approved, "10.0.0.2",
                          "a path-mismatched URL rule must not drag the pin outside the CIDR")
+
+
+class UnverifiedAddressRefusalTests(unittest.TestCase):
+    """No approved address means no connection: never resolve at connect time."""
+
+    def _scope(self, targets, *, allow_private: bool = False):
+        return Scope(ScopeConfig(authorized=True, targets=targets, allow_loopback=True,
+                                 allow_private=allow_private, max_rps=100),
+                     allow_public_targets=True)
+
+    def _ctx(self, scope):
+        tmp = Path(tempfile.mkdtemp())
+        cfg = AriaXConfig(data_dir=str(tmp), runs_dir=str(tmp / "runs"))
+        cfg.scope = scope.config
+        cfg.sandbox = SandboxConfig(backend="local")
+        cfg.safety = SafetyConfig(approval="auto")
+        store = Store(":memory:")
+        bus = EventBus()
+        self.addCleanup(store.close)
+        return ToolContext(
+            project=SimpleNamespace(id="p"), run_id="r", workdir=tmp, config=cfg, scope=scope,
+            sandbox=sandbox_mod.build_sandbox(cfg.sandbox, tmp), store=store, events=bus,
+            agent="worker", role="worker", task_id=None,
+        )
+
+    def test_verified_target_rejects_empty_addresses(self) -> None:
+        s = self._scope(["late.test"])
+        decision = s.authorize_host("late.test", 80)
+        self.assertTrue(decision.allowed)
+        self.assertEqual(list(decision.ips), [])
+        with self.assertRaises(ScopeViolation):
+            net_tool._verified_target(self._ctx(s), decision, "late.test", 80)
+
+    def test_http_request_does_not_connect_without_an_address(self) -> None:
+        landed: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                landed.append(self.path)
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        scope = self._scope(["late.test"])
+        ctx = self._ctx(scope)
+        with mock.patch("aria_x.tools.scope._resolve", return_value=[]):
+            with self.assertRaises(ScopeViolation):
+                net_tool.http_request(ctx, {"url": f"http://late.test:{port}/leak",
+                                            "method": "GET"})
+        self.assertEqual(landed, [], "no packet may leave for an unverified host")
+
+    def test_port_scan_and_tls_probe_refuse_unverified_hosts(self) -> None:
+        scope = self._scope(["late.test"])
+        ctx = self._ctx(scope)
+        with mock.patch("aria_x.tools.scope._resolve", return_value=[]):
+            with self.assertRaises(ScopeViolation):
+                net_tool.port_scan(ctx, {"host": "late.test", "ports": "80"})
+            with self.assertRaises(ScopeViolation):
+                net_tool.tls_probe(ctx, {"host": "late.test", "port": 443})
+
+    def test_ip_literals_and_resolved_hosts_still_work(self) -> None:
+        s = self._scope(["127.0.0.1"])
+        ctx = self._ctx(s)
+        literal = s.authorize_host("127.0.0.1", 80)
+        self.assertEqual(net_tool._verified_target(ctx, literal, "127.0.0.1", 80), "127.0.0.1")
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+            resolved = s.authorize_host("ok.test", 80)
+        self.assertEqual(net_tool._verified_target(ctx, resolved, "ok.test", 80), "127.0.0.1")

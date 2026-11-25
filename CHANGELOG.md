@@ -15,7 +15,9 @@ change, but persisted schema changes will include a migration note.
   authorized. `user@host` is gated on network clients so e-mail addresses in
   payloads are not mistaken for targets, and `git` is only checked for remote
   subcommands.
-- **DNS pinning**: the address authorized by scope is the address contacted.
+- **DNS pinning**: the address authorized by scope is the address contacted, and a host
+  that produced no address during authorization is refused at connect time rather than
+  resolved later (a late resolution would bypass the deny/private/public checks).
   `Scope` derives the address each decision approves (a declared CIDR wins over the
   first A record) and every request binds that address locally, so a concurrent
 authorization for the same host cannot move a connection. HTTP requests route
@@ -68,7 +70,7 @@ authorization for the same host cannot move a connection. HTTP requests route
 
 - `save()`/`export_public()` write only new files; `save_private("<path>.json")`
   remains the reloadable, `0o600` path (unchanged from 0.2.1).
-- Test count: 346 (was 269).
+- Test count: 354 (was 269).
 
 ## [0.2.1] — 2026-11-23
 

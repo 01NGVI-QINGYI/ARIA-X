@@ -703,6 +703,11 @@ def render_html(
               f'<div class="label">{_escape(strings["html_stat_assets"])}</div></div>'
               f'<div class="stat"><div class="value">{counts["nodes"].get("fact", 0)}</div>'
               f'<div class="label">{_escape(strings["html_stat_facts"])}</div></div>')
+    if not graph_svg and export:
+        try:
+            graph_svg = attack_graph_svg(export)
+        except Exception:  # a diagram must never break the report
+            graph_svg = ""
     body = markdown_to_html(markdown, mermaid_svg=graph_svg)
     raw_ver = _meta_text(meta, "version", __version__)
     ver_label = raw_ver if raw_ver.startswith("v") else f"v{raw_ver}"
@@ -783,11 +788,33 @@ def write_report(
 _MAX_GRAPH_ASSETS = 18
 _MAX_GRAPH_FINDINGS = 12
 
+# File-ish suffixes that must never be mistaken for a hostname.
+_HOSTISH_SUFFIXES = frozenset({
+    "txt", "json", "sql", "py", "sh", "conf", "log", "md", "csv", "xml", "yml", "yaml",
+    "zip", "tar", "gz", "tgz", "bin", "pem", "key", "crt", "cer", "pcap", "html", "htm",
+    "js", "css", "png", "jpg", "jpeg", "gif", "pdf", "docx", "xlsx", "pptx", "db",
+    "sqlite", "bak", "old", "tmp", "lock", "cfg", "ini", "env", "sock", "pid", "toml",
+})
 
-def _graph_model(export: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
-    """Return (asset chain, findings) capped for a readable diagram, or None."""
+
+def _anchors(export: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Map node id -> anchored asset ids (``finding -> asset`` edges)."""
+    out: dict[str, list[str]] = {}
+    for item in _as_list(export.get("anchors")):
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or "")
+        asset_id = str(item.get("asset_id") or "")
+        if node_id and asset_id:
+            out.setdefault(node_id, []).append(asset_id)
+    return out
+
+
+def _graph_model(export: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[str]]] | None:
+    """Return (asset chain, findings, finding_id -> asset_ids), capped for readability."""
     assets = [a for a in _as_list(export.get("assets")) if isinstance(a, dict)]
     findings = _findings(export)
+    anchors = _anchors(export)
     if not assets and not findings:
         return None
     by_id = {str(a.get("id")): a for a in assets}
@@ -810,34 +837,38 @@ def _graph_model(export: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[
         parent = str(asset.get("parent_id") or "")
         if not parent or parent not in by_id:
             walk(asset)
-    for asset in assets:  # orphans / breadth-first leftovers
-        if str(asset.get("id")) not in seen:
+    for asset in assets:
+        if str(asset.get("id")) not in seen and len(ordered) < _MAX_GRAPH_ASSETS:
             ordered.append(asset)
             seen.add(str(asset.get("id")))
-        if len(ordered) >= _MAX_GRAPH_ASSETS:
-            break
-    return ordered, findings[:_MAX_GRAPH_FINDINGS]
+    kept = {str(a.get("id")) for a in ordered}
+    links = {str(f.get("id")): [a for a in anchors.get(str(f.get("id")), []) if a in kept]
+             for f in findings}
+    return ordered, findings[:_MAX_GRAPH_FINDINGS], links
+
+
+def _short_label(text: Any, limit: int = 46) -> str:
+    """Single-line, self-truncated label (never the ``truncate()`` marker)."""
+    raw = str(text if text is not None else "").replace("\r", " ").replace("\n", " ").strip()
+    if len(raw) > limit:
+        raw = raw[: limit - 1].rstrip() + "…"
+    return raw or "—"
 
 
 def _mermaid_label(text: Any, limit: int = 46) -> str:
-    raw = str(text if text is not None else "").replace("\r", "").replace("\n", " ").strip()
-    if len(raw) > limit:
-        raw = raw[: limit - 1].rstrip() + "…"
-    cleaned = raw.replace('"', "'")
-    return cleaned or "—"
+    return _short_label(text, limit).replace('"', "'")
 
 
 def attack_graph_mermaid(export: Mapping[str, Any]) -> str:
-    """Render the asset chain and findings as a Mermaid ``flowchart TD`` block."""
+    """Render the asset chain and anchored findings as a Mermaid ``flowchart TD``."""
     model = _graph_model(export)
     if model is None:
         return ""
-    assets, findings = model
+    assets, findings, links = model
     lines = ["```mermaid", "flowchart TD"]
     for index, asset in enumerate(assets):
-        kind = _plain(asset.get("kind"), 18)
-        value = _mermaid_label(asset.get("value"))
-        lines.append(f'  A{index}["{kind}: {value}"]')
+        kind = _short_label(asset.get("kind"), 18)
+        lines.append(f'  A{index}["{kind}: {_mermaid_label(asset.get("value"))}"]')
     parent_index = {str(a.get("id")): i for i, a in enumerate(assets)}
     for index, asset in enumerate(assets):
         parent = str(asset.get("parent_id") or "")
@@ -846,9 +877,9 @@ def attack_graph_mermaid(export: Mapping[str, Any]) -> str:
     for index, finding in enumerate(findings):
         severity = _severity(finding).lower()
         lines.append(f'  F{index}["{severity.upper()}: {_mermaid_label(finding.get("title"))}"]')
-        parent = str(finding.get("parent_id") or "")
-        anchor = parent_index.get(parent)
-        lines.append(f"  A{anchor} --> F{index}" if anchor is not None else f"  A0 --> F{index}")
+        # Only real anchors create edges; an unanchored finding stays a lone node.
+        for asset_id in links.get(str(finding.get("id")), []):
+            lines.append(f"  A{parent_index[asset_id]} --> F{index}")
     lines.append("  classDef sev_critical fill:#7f1d1d,stroke:#f87171,color:#fff")
     lines.append("  classDef sev_high fill:#7c2d12,stroke:#fb923c,color:#fff")
     lines.append("  classDef sev_medium fill:#78350f,stroke:#fbbf24,color:#fff")
@@ -868,32 +899,34 @@ def attack_graph_svg(export: Mapping[str, Any]) -> str:
     model = _graph_model(export)
     if model is None:
         return ""
-    assets, findings = model
+    assets, findings, links = model
     node_h, gap, left_w, right_w = 34, 12, 300, 320
     rows = max(len(assets), len(findings), 1)
     height = 24 + rows * (node_h + gap)
     width = left_w + right_w + 120
 
-    def box(x: int, y: int, w: int, text: str, *, fill: str, stroke: str) -> str:
-        label = _escape_text(_plain(text, 44))
+    def box(x: int, y: int, w: int, text: str, *, fill: str, stroke: str, bright: bool) -> str:
+        label = _escape_text(_short_label(text, 44))
+        colour = "#0f172a" if bright else "#f8fafc"
         return (
             f'<rect x="{x}" y="{y}" width="{w}" height="{node_h}" rx="6" '
             f'fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>'
-            f'<text x="{x + 10}" y="{y + node_h // 2 + 5}" font-size="12" '
-            f'fill="{"#f8fafc" if fill != "#f8fafc" else "#0f172a"}">{label}</text>'
+            f'<text x="{x + 10}" y="{y + node_h // 2 + 5}" font-size="12" fill="{colour}">{label}</text>'
         )
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" font-family="ui-sans-serif,system-ui,sans-serif">',
+        '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" '
+        'orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#475569"/></marker></defs>',
         f'<rect width="{width}" height="{height}" fill="#0f172a"/>',
     ]
-    asset_y: dict[int, int] = {}
+    asset_y: dict[str, int] = {}
     for index, asset in enumerate(assets):
         y = 20 + index * (node_h + gap)
-        asset_y[index] = y
+        asset_y[str(asset.get("id"))] = y
         parts.append(box(30, y, left_w, f"{asset.get('kind')}: {asset.get('value')}",
-                         fill="#1e293b", stroke="#38bdf8"))
+                         fill="#1e293b", stroke="#38bdf8", bright=False))
     severities = {"critical": "#f87171", "high": "#fb923c", "medium": "#fbbf24", "low": "#4ade80"}
     fills = {"critical": "#7f1d1d", "high": "#7c2d12", "medium": "#78350f", "low": "#14532d"}
     for index, finding in enumerate(findings):
@@ -901,20 +934,17 @@ def attack_graph_svg(export: Mapping[str, Any]) -> str:
         y = 20 + index * (node_h + gap)
         parts.append(box(width - right_w - 30, y, right_w,
                          f"{severity.upper()}: {finding.get('title')}",
-                         fill=fills.get(severity, "#334155"), stroke=severities.get(severity, "#94a3b8")))
-        parent = str(finding.get("parent_id") or "")
-        anchor = None
-        for i, asset in enumerate(assets):
-            if str(asset.get("id")) == parent:
-                anchor = i
-                break
-        y_from = asset_y.get(anchor if anchor is not None else 0, 20) + node_h // 2
-        parts.append(
-            f'<line x1="{30 + left_w}" y1="{y_from}" x2="{width - right_w - 30}" y2="{y + node_h // 2}" '
-            f'stroke="#475569" stroke-width="1.2" marker-end="url(#arrow)"/>'
-        )
-    parts.insert(1, '<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" '
-                    'orient="auto"><path d="M0,0 L6,3 L0,6 z" fill="#475569"/></marker></defs>')
+                         fill=fills.get(severity, "#334155"),
+                         stroke=severities.get(severity, "#94a3b8"), bright=False))
+        for asset_id in links.get(str(finding.get("id")), []):
+            y_from = asset_y.get(asset_id)
+            if y_from is None:
+                continue
+            parts.append(
+                f'<line x1="{30 + left_w}" y1="{y_from + node_h // 2}" '
+                f'x2="{width - right_w - 30}" y2="{y + node_h // 2}" '
+                f'stroke="#475569" stroke-width="1.2" marker-end="url(#arrow)"/>'
+            )
     parts.append("</svg>")
     return "".join(parts)
 

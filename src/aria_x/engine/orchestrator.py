@@ -1317,8 +1317,11 @@ def _fallback_report(run_dir: Path, export: Mapping[str, Any], meta: Mapping[str
     json_path = run_dir / "report.json"
     markdown_path.write_text(markdown, encoding="utf-8")
     title = f"ARIA-X Engagement Report — {meta.get('project_name') or meta.get('project_id') or 'engagement'}"
-    from ..report.render import attack_graph_svg
-    graph_svg = attack_graph_svg(export)
+    try:  # the fallback must survive a broken primary renderer
+        from ..report.render import attack_graph_svg
+        graph_svg = attack_graph_svg(export)
+    except Exception:
+        graph_svg = ""
     html_path.write_text(_markdown_to_html(markdown, title, graph_svg=graph_svg), encoding="utf-8")
     json_path.write_text(json_dumps(export, indent=2), encoding="utf-8")
     return {"markdown": str(markdown_path), "html": str(html_path), "json": str(json_path)}

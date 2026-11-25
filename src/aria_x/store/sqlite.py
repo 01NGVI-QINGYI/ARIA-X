@@ -360,6 +360,17 @@ class Store:
             c.execute("INSERT OR IGNORE INTO anchors(node_id,asset_id,note,created_at) VALUES(?,?,?,?)",
                       (node_id, asset_id, note, now_iso()))
 
+    def list_anchors(self, project_id: str, *, limit: int = 100000) -> list[dict[str, Any]]:
+        """Return node->asset anchor edges for a project (used by reports)."""
+        rows = self._all(
+            "SELECT an.node_id, an.asset_id, an.note FROM anchors an "
+            "JOIN assets a ON a.id = an.asset_id WHERE a.project_id = ? "
+            "ORDER BY an.node_id, an.asset_id LIMIT ?",
+            (project_id, limit),
+        )
+        return [{"node_id": r["node_id"], "asset_id": r["asset_id"], "note": r["note"] or ""}
+                for r in rows]
+
     def anchors_for_node(self, node_id: str) -> list[Asset]:
         rows = self._all("SELECT a.* FROM anchors an JOIN assets a ON a.id=an.asset_id WHERE an.node_id=?",
                          (node_id,))
@@ -652,6 +663,7 @@ class Store:
             "nodes": [n.to_dict() for n in self.list_nodes(project_id, limit=100000)],
             "edges": [e.to_dict() for e in self.list_edges(project_id, limit=100000)],
             "assets": [a.to_dict() for a in self.list_assets(project_id, limit=100000)],
+            "anchors": self.list_anchors(project_id),
             "todos": [t.to_dict() for t in self.list_todos(project_id)],
             "findings": [n.to_dict() for n in self.list_nodes(project_id, kind="finding", limit=100000)],
             "traces": [t.to_dict() for t in self.list_traces(project_id, limit=100000)],

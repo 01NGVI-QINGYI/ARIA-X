@@ -10,7 +10,7 @@ from pathlib import Path
 from aria_x import __version__
 from aria_x.models import Evidence, Node, Project, Todo, Trace
 from aria_x.report.i18n import REPORT_STRINGS, normalize_report_language, resolve_report_language
-from aria_x.report.render import attack_graph_svg
+from aria_x.report.render import attack_graph_mermaid, attack_graph_svg
 from aria_x.report.render import markdown_to_html, render_html, render_markdown, write_report
 from aria_x.store import Store
 from aria_x.util import new_id
@@ -332,3 +332,58 @@ class AttackGraphTests(unittest.TestCase):
         md = render_markdown(export, language="en")
         self.assertIn("…", md)
         self.assertNotIn("[truncated", md)
+
+class AttackGraphAnchorTests(unittest.TestCase):
+    """Edges come from anchors; unanchored findings stay lone nodes."""
+
+    def _export(self, anchors):
+        return {
+            "project": {"id": "p", "name": "demo"},
+            "nodes": [{"id": "n_f1", "kind": "finding", "title": "Path traversal in /files",
+                       "meta": {"severity": "high"}, "parent_id": "n_intent"}],
+            "edges": [],
+            "assets": [
+                {"id": "a_host", "kind": "host", "value": "127.0.0.1", "parent_id": None},
+                {"id": "a_ep", "kind": "endpoint", "value": "http://127.0.0.1:8000/files",
+                 "parent_id": "a_host"},
+                {"id": "a_flag", "kind": "artifact", "value": "flag.txt", "parent_id": "a_ep"},
+            ],
+            "anchors": anchors,
+            "audit": [],
+        }
+
+    def test_edges_follow_anchors_not_parent_id(self) -> None:
+        export = self._export([{"node_id": "n_f1", "asset_id": "a_ep", "note": ""}])
+        md = attack_graph_mermaid(export)
+        edges = [line.strip() for line in md.splitlines() if "-->" in line]
+        self.assertIn("A1 --> F0", edges)          # endpoint anchor
+        self.assertNotIn("A2 --> F0", edges)       # never the artifact
+        self.assertNotIn("A0 --> F0", edges)       # never the first asset by default
+
+    def test_unanchored_finding_has_no_edge(self) -> None:
+        export = self._export([])
+        md = attack_graph_mermaid(export)
+        self.assertFalse([line for line in md.splitlines() if "--> F0" in line])
+
+    def test_no_phantom_node_when_assets_are_missing(self) -> None:
+        export = self._export([])
+        export["assets"] = []
+        md = attack_graph_mermaid(export)
+        self.assertNotIn("A0", md)
+        self.assertNotIn("marker-end", attack_graph_svg(export))
+
+    def test_svg_labels_have_no_truncate_marker_or_newline(self) -> None:
+        export = self._export([{"node_id": "n_f1", "asset_id": "a_ep", "note": ""}])
+        export["nodes"][0]["title"] = "A very long finding title " * 4
+        svg = attack_graph_svg(export)
+        self.assertNotIn("truncated", svg)
+        for chunk in svg.split("<text")[1:]:
+            body = chunk.split("</text>")[0]
+            self.assertNotIn("\n", body, "SVG label must stay on one line")
+
+    def test_render_html_generates_svg_without_explicit_argument(self) -> None:
+        export = self._export([{"node_id": "n_f1", "asset_id": "a_ep", "note": ""}])
+        md = render_markdown(export, language="en")
+        html_text = render_html(md, export, language="en")
+        self.assertIn('class="attack-graph"', html_text)
+        self.assertNotIn("language-mermaid", html_text)

@@ -5,40 +5,13 @@ change, but persisted schema changes will include a migration note.
 
 ## [0.3.0] — 2026-11-25
 
-### Capability & Correctness
+### Added
 
-- **Non-HTTP targets now reach the scope engine**: `terminal_exec` only matched
-  literal IPv4 addresses and URLs, so `ssh root@evil.example`, `smbclient -L
-  //evil.example/share` and `mysql -h evil.example` executed with no scope
-  decision. UNC paths, `user@host`, `-h/--host` flags, `host:port` and the
-  trailing positional argument of network clients are now extracted and
-  authorized. `user@host` is gated on network clients so e-mail addresses in
-  payloads are not mistaken for targets, and `git` is only checked for remote
-  subcommands.
-- **DNS pinning**: the address authorized by scope is the address contacted, and a host
-  that produced no address during authorization is refused at connect time rather than
-  resolved later (a late resolution would bypass the deny/private/public checks).
-  `Scope` derives the address each decision approves (a declared CIDR wins over the
-  first A record) and every request binds that address locally, so a concurrent
-  authorization for the same host cannot move a connection. HTTP requests route
-  lookups through a thread-local resolver pin, closing the rebinding window
-  between check and connect. TLS SNI and the `Host` header keep the hostname.
-- **Mass docker teardown blocked**: `docker rm -f $(docker ps -aq)`,
-  `docker system prune` and the volume/prune family previously passed the
-  destructive policy, deleting unrelated containers on the operator's machine.
-- **Unimplemented config keys removed**: `skills_dir`, `prompts_dir`,
-  `planner_role`, `worker_role`, `specialist_role` and `reason_on_change` had no
-  effect. They are gone, and any unknown key (including typos) is now reported by
-  `aria-x doctor` instead of being dropped silently. The example config also had
-  `max_concurrency` under `[engine]` instead of `[budget]`.
-
-### Features
-
-- **Attack-path diagram**: report section 5 renders the asset chain and its
+- **Attack-path diagram in reports**: section 5 renders the asset chain and its
   findings as a Mermaid flowchart in `report.md` and an inline SVG in
   `report.html` (no JavaScript, no CDN), colour-coded by severity and localized.
-- **Resume**: `aria-x run --resume [RUN_ID]` (or `Engagement.resume()`) re-enters
-  a run left in `running`, `failed`, `interrupted` or `budget`; a run the operator
+- **Resume**: `aria-x run --resume [RUN_ID]` (or `Engagement.resume()`) re-enters a
+  run left in `running`, `failed`, `interrupted` or `budget`; a run the operator
   cancelled needs its explicit id. The run keeps its id, bootstrap is skipped
   because its nodes exist, and traces/usage stay in one place.
 - **Streaming model output**: OpenAI and Anthropic providers stream plain-text
@@ -46,10 +19,34 @@ change, but persisted schema changes will include a migration note.
   as transient events, so per-token progress never reaches SQLite or the JSONL log.
   Tool-calling calls stay non-streaming by design, and because the planner/worker
   roles always carry tools, streaming currently applies to tool-free calls only
-  (final answer synthesis, the doctor probe, JSON repair). A truncated or non-SSE
-  response is raised as a retryable error instead of being returned as success.
+  (final answer synthesis, the doctor probe, JSON repair).
 
-### Fixes from independent review
+### Changed
+
+- **Non-HTTP targets now reach the scope engine**: `terminal_exec` only matched
+  literal IPv4 addresses and URLs, so `ssh root@evil.example`,
+  `smbclient -L //evil.example/share` and `mysql -h evil.example` executed with no
+  scope decision. UNC paths, `user@host`, `-h/--host` flags, `host:port` and the
+  trailing positional argument of network clients are now extracted and
+  authorized. `user@host` is gated on network clients so e-mail addresses in
+  payloads are not mistaken for targets, and `git` is only checked for remote
+  subcommands.
+- **DNS pinning**: the address authorized by scope is the address contacted, and a
+  host that produced no address during authorization is refused at connect time
+  rather than resolved later (a late resolution would bypass the
+  deny/private/public checks). `Scope` derives the address each decision approves
+  (a declared CIDR wins over the first A record) and every request binds that
+  address locally, so a concurrent authorization for the same host cannot move a
+  connection. HTTP requests route lookups through a thread-local resolver pin,
+  closing the rebinding window between check and connect. TLS SNI and the `Host`
+  header keep the hostname.
+- **Unimplemented config keys removed**: `skills_dir`, `prompts_dir`,
+  `planner_role`, `worker_role`, `specialist_role` and `reason_on_change` had no
+  effect. They are gone, and any unknown key (including typos) is now reported by
+  `aria-x doctor` instead of being dropped silently. The example config also had
+  `max_concurrency` under `[engine]` instead of `[budget]`.
+
+### Fixed
 
 - Report graphs now derive `asset -> finding` edges from `anchors` (findings hold
   an intent id in `parent_id`, so every finding was previously drawn from the
@@ -64,10 +61,16 @@ change, but persisted schema changes will include a migration note.
 - DNS pinning covers redirect hops and `tls_probe`/`port_scan`, binds every
   request to its own decision's address, and refuses to connect when
   authorization produced no address at all.
-- Streaming raises a retryable error on truncated/non-SSE responses; tool-free
-  calls stream, tool-carrying calls do not.
+- Streaming raises a retryable error on truncated/non-SSE responses instead of
+  returning them as success; tool-free calls stream, tool-carrying calls do not.
 - Docker teardown rules cover backticks, `xargs`, `container/image` subcommands
   and `buildx prune`; internal config fields can no longer be set from a file.
+
+### Security
+
+- **Mass docker teardown blocked**: `docker rm -f $(docker ps -aq)`,
+  `docker system prune` and the volume/prune family previously passed the
+  destructive policy, deleting unrelated containers on the operator's machine.
 
 ### Notes
 

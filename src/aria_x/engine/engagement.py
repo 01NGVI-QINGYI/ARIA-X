@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import copy
 import contextlib
-import fcntl
 import threading
 from pathlib import Path
+
+try:  # POSIX only; the project targets macOS and Linux.
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - Windows falls back to no cross-process lock
+    _fcntl = None  # type: ignore[assignment]
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -265,6 +269,9 @@ class Engagement:
         the very recovery it is meant to allow. The kernel releases the lock
         when the owner dies, keeping a crashed run resumable.
         """
+        if _fcntl is None:
+            yield
+            return
         directory = Path(getattr(self.config, "data_dir", "data")) / "locks"
         try:
             directory.mkdir(parents=True, exist_ok=True)
@@ -275,7 +282,7 @@ class Engagement:
         try:
             handle = open(directory / f"{project_id}.lock", "a+")
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
             except OSError as exc:
                 raise ConfigError(
                     f"project {project_id} is already being run by another process") from exc
@@ -283,7 +290,7 @@ class Engagement:
         finally:
             if handle is not None:
                 try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
                 except OSError:
                     pass
                 handle.close()

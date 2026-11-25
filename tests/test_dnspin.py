@@ -105,10 +105,11 @@ class PinnedHttpRequestTests(unittest.TestCase):
             scope.authorize_host("rebind.example.test", self.port)
         self.assertEqual(scope.pinned_addresses().get("rebind.example.test"), "127.0.0.1")
 
-        result = net_tool.http_request(
-            self._ctx(scope),
-            {"url": f"http://rebind.example.test:{self.port}/pinned", "method": "GET"},
-        )
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+            result = net_tool.http_request(
+                self._ctx(scope),
+                {"url": f"http://rebind.example.test:{self.port}/pinned", "method": "GET"},
+            )
         self.assertTrue(result.ok, getattr(result, "error", ""))
         self.assertTrue(self.seen, "local server received no request")
         host_header, path = self.seen[0]
@@ -164,15 +165,6 @@ class RedirectAndProbePinningTests(unittest.TestCase):
         cfg.sandbox = SandboxConfig(backend="local")
         cfg.safety = SafetyConfig(approval="auto")
         scope = self._scope()
-        original = scope.authorize_url
-
-        def patched(url: str, method: str = "GET"):
-            decision = original(url, method)
-            if decision.allowed and "hop2.invalid" in url:
-                scope._pinned["hop2.invalid"] = "127.0.0.1"
-            return decision
-
-        scope.authorize_url = patched  # type: ignore[assignment]
         store = Store(":memory:")
         bus = EventBus()
         ctx = ToolContext(
@@ -181,8 +173,12 @@ class RedirectAndProbePinningTests(unittest.TestCase):
             agent="worker", role="worker", task_id=None,
         )
         try:
-            result = net_tool.http_request(
-                ctx, {"url": f"http://127.0.0.1:{start_port}/start", "method": "GET"})
+            def fake_resolve(name: str) -> list[str]:
+                return ["127.0.0.1"] if "hop2.invalid" in name else ["127.0.0.1"]
+
+            with mock.patch("aria_x.tools.scope._resolve", side_effect=fake_resolve):
+                result = net_tool.http_request(
+                    ctx, {"url": f"http://127.0.0.1:{start_port}/start", "method": "GET"})
             self.assertTrue(result.ok, getattr(result, "error", ""))
             self.assertTrue(landed, "redirect hop did not reach the pinned address")
             self.assertIn("hop2.invalid", landed[0][0])
@@ -207,7 +203,6 @@ class RedirectAndProbePinningTests(unittest.TestCase):
         scope = Scope(ScopeConfig(authorized=True, targets=["pinned.invalid"],
                                   allow_private=True, allow_loopback=True, max_rps=100),
                       allow_public_targets=True)
-        scope._pinned["pinned.invalid"] = "127.0.0.1"
         store = Store(":memory:")
         bus = EventBus()
         ctx = ToolContext(
@@ -216,8 +211,9 @@ class RedirectAndProbePinningTests(unittest.TestCase):
             agent="worker", role="worker", task_id=None,
         )
         try:
-            result = net_tool.port_scan(
-                ctx, {"host": "pinned.invalid", "ports": str(port), "timeout": 0.3})
+            with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+                result = net_tool.port_scan(
+                    ctx, {"host": "pinned.invalid", "ports": str(port), "timeout": 0.3})
             self.assertTrue(result.ok, getattr(result, "error", ""))
             payload = result.data or {}
             ports_open = [item["port"] for item in payload.get("open_ports", [])]
@@ -297,3 +293,34 @@ class PortScanAddressSelectionTests(unittest.TestCase):
         finally:
             store.close()
             listener.close()
+
+
+class PerRequestPinningTests(unittest.TestCase):
+    """Each connection uses the address its own authorization approved."""
+
+    def _scope(self, targets):
+        return Scope(ScopeConfig(authorized=True, targets=targets, allow_loopback=True,
+                                 allow_private=True, max_rps=100),
+                     allow_public_targets=True)
+
+    def test_cidr_wins_when_a_url_rule_also_matches(self) -> None:
+        s = self._scope(["https://mix.test/api", "127.0.0.2/32"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1", "127.0.0.2"]):
+            decision = s.authorize_url("https://mix.test/api/users")
+        self.assertTrue(decision.allowed)
+        approved = s.approved_address(decision.host, decision.port, decision.ips)
+        self.assertEqual(approved, "127.0.0.2",
+                         "an address inside the declared CIDR must win over ips[0]")
+
+    def test_a_later_authorization_does_not_redirect_an_earlier_request(self) -> None:
+        s = self._scope(["127.0.0.0/8"])
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.1"]):
+            first = s.authorize_host("race.test", 80)
+        first_approved = s.approved_address(first.host, first.port, first.ips)
+        with mock.patch("aria_x.tools.scope._resolve", return_value=["127.0.0.2"]):
+            second = s.authorize_host("race.test", 80)
+        second_approved = s.approved_address(second.host, second.port, second.ips)
+        self.assertEqual(first_approved, "127.0.0.1")
+        self.assertEqual(second_approved, "127.0.0.2")
+        # The first request must keep its own approved address, not the shared pin.
+        self.assertNotEqual(first_approved, s.pinned_addresses().get("race.test"))

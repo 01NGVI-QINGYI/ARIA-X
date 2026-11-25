@@ -437,6 +437,32 @@ class Scope:
 
         return Decision(True, "", target, host, port, ips)
 
+    def approved_address(self, host: str, port: int | None, ips: Sequence[str]) -> str:
+        """Return the address this authorization approves for *host*.
+
+        When an explicit CIDR rule is declared, an address inside it wins: the
+        operator's network statement is the narrower claim about which machine
+        is theirs. Otherwise the first address that passed the deny/type checks.
+        """
+        if not ips:
+            return ""
+        candidates: list[str] = []
+        for ip_text in ips:
+            try:
+                ip = ipaddress.ip_address(ip_text)
+            except ValueError:
+                continue
+            if any(ip in net for net in self.deny_nets):
+                continue
+            candidates.append(str(ip))
+        if not candidates:
+            return ""
+        for text in candidates:
+            ip = ipaddress.ip_address(text)
+            if any(ip in net for net in self.net_rules):
+                return text
+        return candidates[0]
+
     def _pin_authorized_address(self, host: str, port: int | None, ips: Sequence[str]) -> None:
         """Record the address that *this* authorization approved.
 
@@ -447,22 +473,7 @@ class Scope:
         """
         if not host or not ips:
             return
-        hostname_rule = any(rule.matches(host, port) for rule in self.host_rules)
-        url_host_rule = any(rule.host_rule.matches(host, port) for rule in self.url_rules)
-        chosen = ""
-        for ip_text in ips:
-            try:
-                ip = ipaddress.ip_address(ip_text)
-            except ValueError:
-                continue
-            if any(ip in net for net in self.deny_nets):
-                continue
-            if not self.net_rules or hostname_rule or url_host_rule:
-                chosen = str(ip)
-                break
-            if any(ip in net for net in self.net_rules):
-                chosen = str(ip)
-                break
+        chosen = self.approved_address(host, port, ips)
         if chosen:
             with self._pinned_lock:
                 self._pinned[host] = chosen

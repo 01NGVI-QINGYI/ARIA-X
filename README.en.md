@@ -50,8 +50,6 @@ Each verification engagement follows an auditable **directed state-space search*
 
 ### Compact Lineage Diagram
 
-<div align="center">
-
 ```mermaid
 flowchart LR
     subgraph UP["Upstream Lineage"]
@@ -66,7 +64,7 @@ flowchart LR
         EX["Guarded Execution<br/>agents · tools · llm<br/>27 Tools + Sandbox<br/>Scope + DNS Pin"]
     end
 
-    OUT(["Outputs<br/>report · server · web<br/>Evidence Reports<br/>Audit + SSE Console"])
+    OUT["Outputs<br/>report · server · web<br/>Evidence Reports<br/>Audit + SSE Console"]
 
     C --> ST
     C --> OR
@@ -77,8 +75,6 @@ flowchart LR
     OR --> OUT
     EX --> OUT
 ```
-
-</div>
 
 ### Capability Fusion Matrix
 
@@ -132,16 +128,14 @@ ARIA-X combines context-aware agent reasoning with explicit state, execution pol
 
 Main execution loop ([src/aria_x/engine/orchestrator.py](src/aria_x/engine/orchestrator.py)):
 
-<div align="center">
-
 ```mermaid
 flowchart LR
-    BOOT["1. bootstrap<br/>Baseline probe"]
-    RSN["2. reason<br/>Emit Intents"]
-    DSP["3. dispatch<br/>Parallel tasks"]
-    WRK["4. worker<br/>Guarded tools"]
-    PST["5. persist<br/>SQLite + audit"]
-    RPT(["6. report<br/>MD / HTML / JSON"])
+    BOOT["bootstrap<br/>Baseline probe"]
+    RSN["reason<br/>Emit Intents"]
+    DSP["dispatch<br/>Parallel tasks"]
+    WRK["worker<br/>Guarded tools"]
+    PST["persist<br/>SQLite + audit"]
+    RPT["report<br/>MD / HTML / JSON"]
 
     BOOT --> RSN
     RSN --> DSP
@@ -501,7 +495,7 @@ Related repositories by the upstream authors:
 The **architectural consolidation, code implementation, unit test suite, offline verification pipeline, and bilingual documentation** of ARIA-X were developed with assistance from **DeepSeek Harness (DeepSeek-V4.1-Flash-1017)**:
 - Distilling three heterogeneous stacks (Go / Python / Go+TS) into a single Python state machine and unified SQLite schema;
 - Implementing and refactoring the orchestration engine, tool registry, LLM router, HTTP API, and local web console;
-- Authoring the 217 unit tests, deterministic offline demo (`./aria-x demo`), and verification scripts.
+- Authoring the 354 unit tests, deterministic offline demo (`./aria-x demo`), and verification scripts.
 
 All architectural trade-offs, safety boundaries, and final code were reviewed and validated by the maintainer.
 

@@ -43,8 +43,6 @@ ARIA-X は **ARTEX、Cairn、PentAGI** の設計思想を取り入れ、永続�
 
 ### 設計系譜と統合図
 
-<div align="center">
-
 ```mermaid
 flowchart LR
     subgraph UP["上流の設計思想"]
@@ -59,7 +57,7 @@ flowchart LR
         EX["制御実行層<br/>agents · tools · llm<br/>27 ツールと隔離<br/>Scope + DNS 固定"]
     end
 
-    OUT(["再現可能な成果物<br/>report · server · web<br/>証拠付きレポート<br/>監査 + SSE 画面"])
+    OUT["再現可能な成果物<br/>report · server · web<br/>証拠付きレポート<br/>監査 + SSE 画面"]
 
     C --> ST
     C --> OR
@@ -70,8 +68,6 @@ flowchart LR
     OR --> OUT
     EX --> OUT
 ```
-
-</div>
 
 ## 主な機能（v0.3.0）
 
@@ -91,16 +87,14 @@ flowchart LR
   <img src="assets/architecture.svg" alt="ARIA-X のアーキテクチャ" width="100%">
 </p>
 
-<div align="center">
-
 ```mermaid
 flowchart LR
-    BOOT["1. bootstrap<br/>初期事実収集"]
-    RSN["2. reason<br/>Intent 生成"]
-    DSP["3. dispatch<br/>並列タスク起動"]
-    WRK["4. worker<br/>制御ツール検証"]
-    PST["5. persist<br/>状態・証拠保存"]
-    RPT(["6. report<br/>レポート出力"])
+    BOOT["bootstrap<br/>初期事実収集"]
+    RSN["reason<br/>Intent 生成"]
+    DSP["dispatch<br/>並列タスク起動"]
+    WRK["worker<br/>制御ツール検証"]
+    PST["persist<br/>状態・証拠保存"]
+    RPT["report<br/>レポート出力"]
 
     BOOT --> RSN
     RSN --> DSP

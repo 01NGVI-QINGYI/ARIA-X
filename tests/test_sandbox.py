@@ -121,3 +121,26 @@ class LocalSandboxTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class DockerDestructivePolicyTests(unittest.TestCase):
+    """Mass docker teardown damages the operator's environment, not the target."""
+
+    def setUp(self) -> None:
+        self.policy = CommandPolicy(block_destructive=True)
+
+    def test_mass_container_teardown_is_blocked(self) -> None:
+        for cmd in (
+            "docker rm -f $(docker ps -aq)",
+            "docker kill $(docker ps -q)",
+            "docker rmi $(docker images -q)",
+        ):
+            self.assertFalse(self.policy.check(cmd).allowed, cmd)
+
+    def test_docker_prune_is_blocked(self) -> None:
+        for cmd in ("docker system prune -af", "docker volume prune -f", "docker container prune -f"):
+            self.assertFalse(self.policy.check(cmd).allowed, cmd)
+
+    def test_normal_docker_usage_still_allowed(self) -> None:
+        for cmd in ("docker ps", "docker run -it alpine sh", "docker compose up -d",
+                    "docker logs -f target", "docker exec -it target sh"):
+            self.assertTrue(self.policy.check(cmd).allowed, cmd)

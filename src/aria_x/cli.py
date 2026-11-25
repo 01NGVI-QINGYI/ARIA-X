@@ -527,6 +527,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     try:
         config = load_config(args)
         check("config", True, f"provider={config.llm.provider} model={config.llm.model}")
+        unknown_keys = list(getattr(config, "unknown_keys", []) or [])
+        if unknown_keys:
+            shown = ", ".join(unknown_keys[:6])
+            more = f" (+{len(unknown_keys) - 6} more)" if len(unknown_keys) > 6 else ""
+            check("config-keys", True, f"{len(unknown_keys)} unused",
+                  warning="config keys this version does not implement are ignored: "
+                          f"{shown}{more}")
     except AriaXError as exc:
         check("config", False, str(exc))
         config = AriaXConfig()

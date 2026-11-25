@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import urllib.error
@@ -57,6 +58,8 @@ class AnthropicProvider:
         collected: list[str] = []
         finish = ""
         prompt_tokens = completion_tokens = 0
+        saw_event = False
+        saw_stop = False
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as resp:
                 for raw in resp:
@@ -67,6 +70,7 @@ class AnthropicProvider:
                         obj = json.loads(line[5:].strip())
                     except ValueError:
                         continue
+                    saw_event = True
                     kind = obj.get("type")
                     if kind == "content_block_delta":
                         piece = (obj.get("delta") or {}).get("text")
@@ -80,14 +84,21 @@ class AnthropicProvider:
                     elif kind == "message_start":
                         usage = ((obj.get("message") or {}).get("usage") or {})
                         prompt_tokens = int(usage.get("input_tokens") or prompt_tokens)
+                    elif kind == "message_stop":
+                        saw_stop = True
                     elif kind == "error":
                         raise LLMError(f"provider error: {obj.get('error')!r}", retryable=False)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:400]
             raise LLMError(f"provider returned HTTP {exc.code}", status=exc.code,
                            retryable=exc.code in _RETRYABLE_STATUS, details={"body": detail}) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise LLMError(f"provider request failed: {exc}", retryable=True) from exc
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+                OSError) as exc:
+            raise LLMError(f"stream interrupted: {exc}", retryable=True) from exc
+        if not saw_event:
+            raise LLMError("provider did not return an SSE stream", retryable=True)
+        if not saw_stop:
+            raise LLMError("stream ended before completion marker", retryable=True)
         return LLMResponse(
             content="".join(collected), tool_calls=[],
             model=self.model, finish_reason=finish or "end_turn",

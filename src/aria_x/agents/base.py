@@ -243,7 +243,8 @@ class Agent:
         )
         response = self.router.chat(self.spec.role, list(messages) + [prompt], None,
                                     temperature=self.spec.temperature,
-                                    max_tokens=self.spec.max_tokens, task_id=task.task_id)
+                                    max_tokens=self.spec.max_tokens, task_id=task.task_id,
+                                    on_delta=self._on_delta(task))
         return response.content or ""
 
     # ------------------------------------------------------------------

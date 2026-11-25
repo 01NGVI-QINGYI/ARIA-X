@@ -191,6 +191,7 @@ class EventPrinter:
 
     def __init__(self, bus: EventBus, *, verbose: bool = False, quiet: bool = False) -> None:
         self.bus = bus
+        self._stream_open = False
         self.verbose = verbose
         self.quiet = quiet
         self.sub = bus.subscribe(maxsize=1000)
@@ -204,6 +205,13 @@ class EventPrinter:
             if event is not None:
                 self.render(event)
 
+    def _clear_stream_line(self) -> None:
+        if getattr(self, "_stream_open", False):
+            if sys.stdout.isatty():
+                sys.stdout.write("\r\033[K")
+                sys.stdout.flush()
+            self._stream_open = False
+
     def render(self, event: Event) -> None:
         if self.quiet:
             return
@@ -213,17 +221,19 @@ class EventPrinter:
         if event.type in {"llm.call", "tool.call"} and not self.verbose:
             return
         if event.type == "llm_delta":
-            # One rewriting line instead of a line per token.
+            # One rewriting line instead of a line per token, only on a TTY.
             if self.verbose:
                 print(f"  … {data.get('role', '')} streaming {data.get('chars', 0)} chars")
-            else:
-                sys.stdout.write("\r  … streaming "
+            elif sys.stdout.isatty():
+                sys.stdout.write("\r\033[K  … streaming "
                                  f"{data.get('chars', 0)} chars ({data.get('role', '')})")
                 sys.stdout.flush()
+                self._stream_open = True
             return
         icon = self.ICONS.get(event.type, "·")
         line = self._describe(event.type, data)
         if line:
+            self._clear_stream_line()
             print(f"  {icon} {line}")
 
     def _describe(self, type_: str, data: dict[str, Any]) -> str:

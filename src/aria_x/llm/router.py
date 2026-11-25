@@ -115,14 +115,15 @@ class ModelRouter:
 
     def json(self, role: str, messages: Sequence[ChatMessage], schema: dict[str, Any] | None = None,
              *, retries: int = 2, task_id: str = "", temperature: float | None = None,
-             max_tokens: int | None = None) -> tuple[Any, LLMResponse]:
+             max_tokens: int | None = None,
+             on_delta: Callable[[str], None] | None = None) -> tuple[Any, LLMResponse]:
         """Call the model and parse a JSON object, retrying once on invalid shape."""
         convo = list(messages)
         last_error = ""
         last_response: LLMResponse | None = None
         for attempt in range(max(1, retries + 1)):
             response = self.chat(role, convo, temperature=temperature, max_tokens=max_tokens,
-                                 json_mode=True, task_id=task_id)
+                                 json_mode=True, task_id=task_id, on_delta=on_delta)
             last_response = response
             try:
                 data = extract_json(response.content)

@@ -7,7 +7,9 @@ that implements ``POST /chat/completions``.
 
 from __future__ import annotations
 
+import http.client
 import json
+import ssl
 import urllib.error
 import urllib.request
 from typing import Any, Mapping, Sequence
@@ -62,6 +64,8 @@ class OpenAIProvider:
         collected: list[str] = []
         finish = ""
         usage: dict[str, Any] = {}
+        saw_data = False
+        saw_done = False
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as resp:
                 for raw in resp:
@@ -69,7 +73,9 @@ class OpenAIProvider:
                     if not line.startswith("data:"):
                         continue
                     chunk = line[5:].strip()
+                    saw_data = True
                     if chunk == "[DONE]":
+                        saw_done = True
                         break
                     try:
                         obj = json.loads(chunk)
@@ -88,8 +94,15 @@ class OpenAIProvider:
             detail = exc.read().decode("utf-8", "replace")[:400]
             raise LLMError(f"provider returned HTTP {exc.code}", status=exc.code,
                            retryable=exc.code in _RETRYABLE_STATUS, details={"body": detail}) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise LLMError(f"provider request failed: {exc}", retryable=True) from exc
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException,
+                ssl.SSLError, OSError) as exc:
+            # A dropped connection mid-stream is retryable; the partial text is
+            # discarded so a truncated answer is never mistaken for a complete one.
+            raise LLMError(f"stream interrupted: {exc}", retryable=True) from exc
+        if not saw_data:
+            raise LLMError("provider did not return an SSE stream", retryable=True)
+        if not saw_done:
+            raise LLMError("stream ended before completion marker", retryable=True)
         return LLMResponse(
             content="".join(collected), tool_calls=[], finish_reason=finish or "stop",
             model=self.model,

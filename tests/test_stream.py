@@ -7,6 +7,7 @@ import json
 import threading
 import unittest
 
+from aria_x.errors import LLMError
 from aria_x.events import EventBus
 from aria_x.llm.base import ChatMessage
 from aria_x.llm.openai import OpenAIProvider
@@ -76,3 +77,48 @@ class StreamingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class StreamFailureTests(unittest.TestCase):
+    """A truncated or non-SSE stream must fail loudly, never return partial text."""
+
+    def _serve(self, chunks):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+                for chunk in chunks:
+                    self.wfile.write(chunk)
+                self.wfile.flush()
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/v1"
+
+    def _client(self, base: str):
+        return OpenAIProvider(base_url=base, api_key="k", model="m")
+
+    def test_truncated_stream_raises_retryable_error(self) -> None:
+        base = self._serve([b'data: {"choices":[{"delta":{"content":"half"}}]}\n\n'])  # no [DONE]
+        with self.assertRaises(LLMError) as caught:
+            self._client(base).chat_stream([ChatMessage.user("hi")], None, on_delta=lambda _p: None)
+        self.assertTrue(caught.exception.details.get("retryable"))
+
+    def test_plain_json_response_is_rejected(self) -> None:
+        base = self._serve([b'{"choices":[{"message":{"content":"plain"}}]}'])
+        with self.assertRaises(LLMError):
+            self._client(base).chat_stream([ChatMessage.user("hi")], None, on_delta=lambda _p: None)
+
+    def test_complete_stream_still_succeeds(self) -> None:
+        base = self._serve([
+            b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ])
+        response = self._client(base).chat_stream([ChatMessage.user("hi")], None, on_delta=lambda _p: None)
+        self.assertEqual(response.content, "ok")

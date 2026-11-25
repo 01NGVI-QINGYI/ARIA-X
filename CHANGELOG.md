@@ -37,9 +37,12 @@ change, but persisted schema changes will include a migration note.
   a run left in `running` or `failed`. The run keeps its id, bootstrap is skipped
   because its nodes exist, and traces/usage stay in one place.
 - **Streaming model output**: OpenAI and Anthropic providers stream plain-text
-  responses; the console shows a live character count. Deltas are emitted as
-  transient events, so per-token progress never reaches SQLite or the JSONL log.
-  Tool-calling calls stay non-streaming by design.
+  responses; the console shows a live character count on a TTY. Deltas are emitted
+  as transient events, so per-token progress never reaches SQLite or the JSONL log.
+  Tool-calling calls stay non-streaming by design, and because the planner/worker
+  roles always carry tools, streaming currently applies to tool-free calls only
+  (final answer synthesis, the doctor probe, JSON repair). A truncated or non-SSE
+  response is raised as a retryable error instead of being returned as success.
 
 ### Notes
 

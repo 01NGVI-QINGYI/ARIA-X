@@ -84,7 +84,7 @@ _NON_HOST_SUFFIXES = frozenset({
     "sqlite", "bak", "old", "tmp", "lock", "cfg", "ini", "env", "sock", "pid", "toml",
     "war", "jar", "php", "rb", "pl", "c", "h", "o", "so", "dylib", "exe", "dll",
 })
-_MAX_COMMAND_HOSTS = 16
+_MAX_COMMAND_HOSTS = 64
 
 
 @dataclass(slots=True)

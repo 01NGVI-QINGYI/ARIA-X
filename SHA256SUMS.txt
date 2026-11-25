@@ -98,7 +98,7 @@ b2942f817392bb3ca85e81005c2254afbb39abe129d2195fe24af7b944f2d5eb  ./src/aria_x/t
 fad29e5c9a81ab052ee79c8f29961439e735524851fe13d19b87e660ed94f694  ./src/aria_x/tools/knowledge.py
 5aecf99cd8cba060e78706af8479b492a8ed3809edb51c761d184c0398cdde50  ./src/aria_x/tools/net.py
 ad7c9f6bc8c64520ccdacdee9983ef4eaf3ba37dee05796eac9ade06ece0236b  ./src/aria_x/tools/sandbox.py
-3ad8d6e4b5e05d31ae8a4b9b815a032e67f829ac893f3af04a602e2ea7fe2bf9  ./src/aria_x/tools/scope.py
+fbcce29d13791d181e366225f76c0aabf2a93361e09ecf6317ba1bfcc791c44b  ./src/aria_x/tools/scope.py
 6427b7d9056303f88fbe3bf26fcfcaebc10d3996cc5f190ece2e046454e11f48  ./src/aria_x/tools/session.py
 2aa798b9e6a610b5afa5d113131f7423a2e716b677ab810adc958be0f1465fa6  ./src/aria_x/tools/terminal.py
 d17e7f7a290e38ede38f93604a640d3c39598f7780446b489431698bdfde003f  ./src/aria_x/util.py

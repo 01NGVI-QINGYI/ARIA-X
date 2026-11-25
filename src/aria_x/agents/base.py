@@ -295,8 +295,7 @@ class Agent:
             emit("llm_delta", project_id=getattr(self.ctx.project, "id", ""),
                  run_id=getattr(self.ctx, "run_id", ""),
                  task_id=getattr(task, "task_id", ""),
-                 data={"role": self.spec.role, "chars": state["chars"],
-                       "preview": piece[-40:]})
+                 data={"role": self.spec.role, "chars": state["chars"]})
 
         return sink
 

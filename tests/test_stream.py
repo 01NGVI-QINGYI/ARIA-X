@@ -122,3 +122,62 @@ class StreamFailureTests(unittest.TestCase):
         ])
         response = self._client(base).chat_stream([ChatMessage.user("hi")], None, on_delta=lambda _p: None)
         self.assertEqual(response.content, "ok")
+
+
+class TransientEventCursorTests(unittest.TestCase):
+    """Progress frames must not become a resume cursor and must not carry text."""
+
+    def test_transient_event_has_no_id(self) -> None:
+        bus = EventBus(replay=10)
+        sub = bus.subscribe()
+        try:
+            bus.emit_transient("llm_delta", data={"chars": 3})
+            event = sub.queue.get(timeout=1)
+            self.assertEqual(event.id, "", "a transient frame must not own an event id")
+            self.assertNotIn("id: ", event.sse())
+        finally:
+            sub.close()
+
+    def test_persisted_event_still_has_id(self) -> None:
+        bus = EventBus(replay=10)
+        sub = bus.subscribe()
+        try:
+            bus.emit("log", data={"message": "kept"})
+            event = sub.queue.get(timeout=1)
+            self.assertTrue(event.id.startswith("ev_"))
+            self.assertIn("id: ", event.sse())
+        finally:
+            sub.close()
+
+    def test_sse_encoder_omits_empty_id(self) -> None:
+        from aria_x.events import Event
+        from aria_x.server.api import _sse_event
+
+        transient = Event(type="llm_delta", data={"chars": 1}, id="")
+        encoded = _sse_event(transient).decode()
+        self.assertNotIn("id:", encoded)
+        persisted = Event(type="log", data={"message": "x"})
+        self.assertIn("id:", _sse_event(persisted).decode())
+
+    def test_delta_payload_has_no_model_text(self) -> None:
+        from aria_x.agents.base import Agent
+
+        class _Spec:
+            role = "worker"
+
+        agent = Agent.__new__(Agent)
+        agent.spec = _Spec()
+        emitted: list[dict] = []
+
+        class _Bus:
+            def emit_transient(self, _type, **kwargs):
+                emitted.append(kwargs.get("data") or {})
+
+        agent.ctx = type("C", (), {"events": _Bus(), "project": type("P", (), {"id": "p"})(),
+                                   "run_id": "r"})()
+        sink = agent._on_delta(type("T", (), {"task_id": "t"})())
+        sink("secret-token-value")
+        sink("more-secret-token-value")   # second call passes the throttle window
+        if emitted:
+            self.assertNotIn("preview", emitted[0])
+            self.assertFalse(any("secret" in str(v) for v in emitted[0].values()))

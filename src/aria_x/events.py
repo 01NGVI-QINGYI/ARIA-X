@@ -66,7 +66,8 @@ class Event:
         }
 
     def sse(self) -> str:
-        return f"id: {self.id}\nevent: {self.type}\ndata: {json_dumps(self.data, ensure_ascii=False)}\n\n"
+        head = f"id: {self.id}\n" if self.id else ""
+        return f"{head}event: {self.type}\ndata: {json_dumps(self.data, ensure_ascii=False)}\n\n"
 
 
 class EventBus:
@@ -181,7 +182,10 @@ class EventBus:
             payload.update(extra)
         if self._redact:
             payload = redact_obj(payload)
-        event = Event(type=type_, project_id=project_id, run_id=run_id, task_id=task_id, data=payload)
+        # No id: a frame without an id must never become the client's resume
+        # cursor, because it is not stored in the replay buffer.
+        event = Event(type=type_, project_id=project_id, run_id=run_id, task_id=task_id,
+                      data=payload, id="")
         with self._lock:
             if self._closed:
                 return

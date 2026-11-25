@@ -714,7 +714,8 @@ def _sse_event(event: Any) -> bytes:
         payload.setdefault("task_id", task_id)
     data = json_dumps(payload, ensure_ascii=False)
     event_id = str(getattr(event, "id", "") or "")
-    return f"id: {event_id}\nevent: {event_type}\ndata: {data}\n\n".encode("utf-8")
+    head = f"id: {event_id}\n" if event_id else ""
+    return f"{head}event: {event_type}\ndata: {data}\n\n".encode("utf-8")
 
 
 def _scope_to_dict(scope: Any) -> dict[str, Any]:

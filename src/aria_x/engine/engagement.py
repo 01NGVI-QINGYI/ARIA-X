@@ -180,6 +180,12 @@ class Engagement:
         self._ensure_open()
         run = self.store.get_run(run_id) if run_id else self.store.latest_resumable_run(project_id)
         if run is None:
+            cancelled = self.store.latest_resumable_run(
+                project_id, statuses=("cancelled",))
+            if cancelled is not None:
+                raise ConfigError(
+                    f"the most recent run was cancelled by the operator; "
+                    f"pass its id to resume it: aria-x run --resume {cancelled.id}")
             raise NotFound(f"no resumable run for {run_id or project_id or 'any project'}")
         if project_id and run.project_id != project_id:
             raise ConfigError(

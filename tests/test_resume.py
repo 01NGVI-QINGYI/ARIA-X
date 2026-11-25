@@ -192,3 +192,37 @@ class CrossInstanceRunLockTests(unittest.TestCase):
         with self.first.project_lock(self.project.id):
             with self.assertRaises(ConfigError):
                 self.second.resume(run.id)
+
+
+class ResumeSelectionPolicyTests(unittest.TestCase):
+    """No-argument resume picks involuntary stops; cancelled needs an id."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp())
+        self.cfg = AriaXConfig(data_dir=str(self.tmp / "data"), runs_dir=str(self.tmp / "runs"))
+        self.cfg.scope = ScopeConfig(authorized=True, targets=["127.0.0.1"],
+                                     allow_loopback=True, max_rps=100)
+        self.cfg.llm = LLMConfig(provider="mock")
+        self.cfg.sandbox = SandboxConfig(backend="local")
+        self.cfg.safety = SafetyConfig(approval="auto")
+        self.store = Store(":memory:")
+        self.bus = EventBus()
+        self.engagement = Engagement(self.cfg, store=self.store, events=self.bus)
+        self.project = self.engagement.create_project("policy", "prove it")
+
+    def tearDown(self) -> None:
+        self.engagement.close()
+        self.store.close()
+
+    def test_no_argument_resume_picks_budget_and_interrupted(self) -> None:
+        for status in ("budget", "interrupted"):
+            run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status=status))
+            self.assertEqual(self.store.latest_resumable_run().id, run.id)
+            self.store.update_run(run.id, status="completed")
+
+    def test_cancelled_is_not_selected_automatically(self) -> None:
+        run = self.store.create_run(Run(id=new_id("run"), project_id=self.project.id, status="cancelled"))
+        self.assertIsNone(self.store.latest_resumable_run())
+        with self.assertRaises(ConfigError):
+            self.engagement.resume()          # hints at the id instead of silently restarting
+        self.assertEqual(self.engagement.resume(run.id).run_id, run.id)

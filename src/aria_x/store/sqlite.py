@@ -188,13 +188,24 @@ class Store:
             c.execute(f"UPDATE runs SET {', '.join(sets)} WHERE id=?", params)
         return self.get_run(run_id)
 
-    def latest_resumable_run(self, project_id: str | None = None) -> Run | None:
-        """Return the most recent run that can still be resumed (running/failed)."""
+    def latest_resumable_run(
+        self,
+        project_id: str | None = None,
+        *,
+        statuses: Sequence[str] = ("running", "failed", "interrupted", "budget"),
+    ) -> Run | None:
+        """Return the most recent run that a no-argument resume may pick up.
+
+        ``cancelled`` is deliberately excluded: it is a deliberate stop by the
+        operator, so resuming it needs an explicit run id.
+        """
+        allowed = tuple(dict.fromkeys(str(s) for s in statuses))
+        placeholders = ",".join("?" for _ in allowed)
         rows = self._all(
-            "SELECT * FROM runs WHERE status IN ('running','failed')"
+            f"SELECT * FROM runs WHERE status IN ({placeholders})"
             + (" AND project_id=?" if project_id else "")
             + " ORDER BY started_at DESC, rowid DESC LIMIT 1",
-            (project_id,) if project_id else (),
+            (*allowed, *( [project_id] if project_id else [] )),
         )
         return Run.from_row(rows[0]) if rows else None
 
